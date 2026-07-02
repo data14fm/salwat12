@@ -914,6 +914,13 @@
   #page-reports .btn-sm:not(.export-xls):not(.export-pdf):hover { background: rgba(255,255,255,.12); }
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" integrity="sha512-r22gChDnGvBylk90+2e/ycr3RVrDi8DIOkIGNhJlKfuyQM4tIRAI062MaV8sfjQKYVGjOBaZBOA87z+IhZE9DA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script>
+  const supabaseClient = supabase.createClient(
+    'https://ritemkjfglhjynrjocwz.supabase.co',
+    'sb_publishable_vS9sy8a4AKLhUc8dR-ZPkA_V_CEHF7B'
+  );
+</script>
 </head>
 <body>
 
@@ -2721,7 +2728,7 @@
       <div class="form-grid" style="grid-template-columns:1fr 1fr;">
         <div class="form-group"><label class="form-label">الاسم <span>*</span></label><input class="form-input" id="u-name" type="text" placeholder="اسم المستخدم"></div>
         <div class="form-group"><label class="form-label">البريد الإلكتروني <span>*</span></label><input class="form-input" id="u-email" type="email" placeholder="user@example.com"></div>
-        <div class="form-group"><label class="form-label">كلمة المرور <span>*</span></label><input class="form-input" id="u-pass" type="text" placeholder="8 أحرف على الأقل"></div>
+        <div class="form-group" id="u-pass-group"><label class="form-label">كلمة المرور</label><input class="form-input" id="u-pass" type="text" placeholder="8 أحرف على الأقل" disabled></div>
         <div class="form-group"><label class="form-label">الدور</label>
           <select class="form-select" id="u-role" onchange="onUserRoleChange()">
             <option value="user">مستخدم (صلاحيات مخصصة)</option>
@@ -6585,27 +6592,24 @@ window.doRegister = async function() {
   if (!email.includes('@')){ err.textContent = 'البريد الإلكتروني غير صحيح'; highlight('re-email'); return; }
   if (pass.length < 8)    { err.textContent = 'كلمة المرور يجب أن تكون 8 أحرف على الأقل'; highlight('re-pass'); return; }
   if (pass !== pass2)     { err.textContent = 'كلمتا المرور غير متطابقتين'; highlight('re-pass2'); return; }
-  if (usersDB[email])     { err.textContent = 'هذا البريد مسجّل مسبقاً — سجّل دخولك'; return; }
 
-  // أول حساب يُسجّل = أدمن بكل الصلاحيات ومفعّل · الباقي بانتظار تفعيل الأدمن
-  const isFirst = Object.keys(usersDB).length === 0;
-  const salt = genSalt();
-  usersDB[email] = {
-    name,
-    salt,
-    passHash: await hashPassword(pass, salt),
-    role: isFirst ? 'admin' : 'user',
-    roleName: '',
-    active: isFirst ? true : false,
-    perms: isFirst ? fullPerms() : emptyPerms(),
-  };
-  suc.textContent = isFirst
-    ? '✓ تم إنشاء حساب الأدمن بنجاح! سجّل الدخول الآن.'
-    : '✓ تم إنشاء حسابك! بانتظار تفعيل الأدمن وتحديد صلاحياتك.';
+  const { error } = await supabaseClient.auth.signUp({
+    email, password: pass,
+    options: { data: { name } },
+  });
+
+  if (error) {
+    err.textContent = error.message.includes('already registered') || error.message.includes('already exists')
+      ? 'هذا البريد مسجّل مسبقاً — سجّل دخولك'
+      : 'تعذّر إنشاء الحساب: ' + error.message;
+    return;
+  }
+
+  suc.textContent = '✓ تم إنشاء حسابك! تحقق من بريدك الإلكتروني واضغط رابط التفعيل، ثم انتظر تفعيل الأدمن قبل الدخول.';
   setTimeout(() => {
     switchAuthTab('login');
     document.getElementById('li-email').value = email;
-  }, 1600);
+  }, 2400);
 };
 
 window.doLogin = async function() {
@@ -6617,14 +6621,53 @@ window.doLogin = async function() {
   if (!email.includes('@')) { err.textContent = 'البريد الإلكتروني غير صحيح'; highlight('li-email'); return; }
   if (!pass)                { err.textContent = 'الرجاء إدخال كلمة المرور';   highlight('li-pass');  return; }
 
-  const user = usersDB[email];
-  if (!user)                          { err.textContent = 'لا يوجد حساب بهذا البريد — سجّل أولاً'; return; }
-  if (user.passHash !== await hashPassword(pass, user.salt || '')) { err.textContent = 'كلمة المرور غير صحيحة'; highlight('li-pass'); return; }
-  if (!user.active) { err.textContent = '⏳ حسابك بانتظار تفعيل الأدمن — لا يمكنك الدخول بعد'; return; }
+  const { error } = await supabaseClient.auth.signInWithPassword({ email, password: pass });
 
-  currentUser = { name: user.name, email, role: user.role || 'user', perms: user.perms || emptyPerms(), editCompleted: !!user.editCompleted };
-  applyLogin();
+  if (error) {
+    if (error.message.includes('Email not confirmed')) {
+      err.textContent = '📧 لم تفعّل بريدك الإلكتروني بعد — تحقق من صندوق الوارد واضغط رابط التفعيل';
+    } else if (error.message.includes('Invalid login credentials')) {
+      err.textContent = 'البريد الإلكتروني أو كلمة المرور غير صحيحة';
+    } else {
+      err.textContent = 'تعذّر تسجيل الدخول: ' + error.message;
+    }
+    return;
+  }
+
+  await loadCurrentUserProfile(email);
 };
+
+// يجلب صف app_users المرتبط بالمستخدم المسجَّل دخوله في Supabase Auth،
+// ويطبّق بوّابة تفعيل الأدمن (منفصلة عن تأكيد البريد الذي تكفّل به Supabase Auth تلقائياً)
+async function loadCurrentUserProfile(email) {
+  const err = document.getElementById('li-error');
+  const { data: profile, error: profileErr } = await supabaseClient
+    .from('app_users')
+    .select('*')
+    .eq('email', email)
+    .single();
+
+  if (profileErr || !profile) {
+    if (err) err.textContent = 'تعذّر تحميل بيانات الحساب — حاول مرة أخرى';
+    await supabaseClient.auth.signOut();
+    return;
+  }
+
+  if (!profile.active) {
+    if (err) err.textContent = '⏳ حسابك بانتظار تفعيل الأدمن — لا يمكنك الدخول بعد';
+    await supabaseClient.auth.signOut();
+    return;
+  }
+
+  currentUser = {
+    name: profile.name || email,
+    email,
+    role: profile.role || 'user',
+    perms: profile.permissions || emptyPerms(),
+    editCompleted: !!profile.edit_completed,
+  };
+  applyLogin();
+}
 
 function applyLogin() {
   const { name, email, role } = currentUser;
@@ -6686,7 +6729,8 @@ function toggleByPerm(page) {
   pageEl.querySelectorAll('.export-xls,.export-pdf').forEach(b => b.style.display = expOk ? '' : 'none');
 }
 
-window.doLogout = function() {
+window.doLogout = async function() {
+  await supabaseClient.auth.signOut();
   currentUser = { name: '', email: '', role: 'user', perms: {} };
   document.getElementById('user-badge').style.display = 'none';
   document.getElementById('user-dropdown').classList.remove('open');
@@ -6694,6 +6738,14 @@ window.doLogout = function() {
   document.getElementById('li-pass').value  = '';
   document.getElementById('li-error').textContent = '';
   document.getElementById('auth-screen').classList.remove('hidden');
+};
+
+// يستعيد الجلسة تلقائياً لو المستخدم كان مسجّلاً دخوله سابقاً في نفس المتصفح
+window.restoreSession = async function() {
+  const { data: { session } } = await supabaseClient.auth.getSession();
+  if (session && session.user && session.user.email) {
+    await loadCurrentUserProfile(session.user.email);
+  }
 };
 
 /* ═══════════════════════════════════════════════════════════════
@@ -6855,23 +6907,36 @@ window.applyRoleTemplate = function() {
   document.getElementById('u-edit-completed').checked = !!rolesDB[roleName].editCompleted;
 };
 
-window.renderUsers = function() {
+let usersCache = {}; // email → app_users row (refreshed by renderUsers)
+
+window.renderUsers = async function() {
   const tbody = document.getElementById('users-tbody');
   if (!tbody) return;
-  const emails = Object.keys(usersDB);
+
+  const { data: rows, error } = await supabaseClient.from('app_users').select('*');
+  if (error) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:24px;color:var(--red);">تعذّر تحميل المستخدمين</td></tr>';
+    return;
+  }
+
+  usersCache = {};
+  rows.forEach(u => { usersCache[u.email] = u; });
+  const emails = Object.keys(usersCache);
+
   if (!emails.length) {
     tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:24px;color:var(--ink-3);">لا يوجد مستخدمون</td></tr>';
     return;
   }
   // الترتيب: غير المفعّلين أولاً (بانتظار التفعيل)
-  const sorted = emails.slice().sort((a,b) => (usersDB[a].active?1:0) - (usersDB[b].active?1:0));
+  const sorted = emails.slice().sort((a,b) => (usersCache[a].active?1:0) - (usersCache[b].active?1:0));
 
-  const pendingCount = emails.filter(e => !usersDB[e].active).length;
+  const pendingCount = emails.filter(e => !usersCache[e].active).length;
   const head = document.querySelector('#upanel-users .card-head');
   if (head) head.innerHTML = `المستخدمون ${pendingCount ? `<span style="font-size:11px;background:var(--amber-light);color:var(--amber);padding:2px 10px;border-radius:10px;font-weight:600;">${pendingCount} بانتظار التفعيل</span>` : ''}`;
 
   tbody.innerHTML = sorted.map(email => {
-    const u = usersDB[email];
+    const u = usersCache[email];
+    u.perms = u.permissions || emptyPerms(); // internal alias so the rest of this function reads like before
     const isAdmin = u.role === 'admin';
     const isSelf = email === currentUser.email;
     let permSummary;
@@ -6882,7 +6947,7 @@ window.renderUsers = function() {
       permSummary = allowed.length
         ? `<span style="font-size:11px;color:var(--ink-3);">${allowed.length} صفحة: ${allowed.map(p=>p.label).join('، ')}</span>`
         : '<span style="font-size:11px;color:var(--red);">لا صلاحيات</span>';
-      if (u.editCompleted) {
+      if (u.edit_completed) {
         permSummary += '<div style="margin-top:3px;"><span style="font-size:10px;background:var(--amber-light);color:var(--amber);padding:1px 8px;border-radius:8px;font-weight:600;">🔒 يعدّل العقود المكتملة</span></div>';
       }
     }
@@ -6896,7 +6961,7 @@ window.renderUsers = function() {
     <tr style="${rowBg}">
       <td><div class="hotel-name">${esc(u.name)}${isSelf?' <span style="font-size:10px;color:var(--ink-3);">(أنت)</span>':''}</div>${statusBadge}</td>
       <td style="font-size:12px;color:var(--ink-3);">${esc(email)}</td>
-      <td><span class="badge ${isAdmin?'badge-green':'badge-blue'}">${isAdmin?'أدمن':esc(u.roleName)||'مستخدم'}</span></td>
+      <td><span class="badge ${isAdmin?'badge-green':'badge-blue'}">${isAdmin?'أدمن':'مستخدم'}</span></td>
       <td>${permSummary}</td>
       <td style="white-space:nowrap;">
         ${!u.active
@@ -6967,22 +7032,21 @@ window.openUserModal = function() {
 };
 
 window.openUserEdit = function(email) {
-  const u = usersDB[email];
+  const u = usersCache[email];
   if (!u) return;
   userEditEmail = email;
   document.getElementById('user-modal-title').textContent = u.active ? 'تعديل المستخدم' : 'تفعيل المستخدم وتحديد صلاحياته';
   document.getElementById('u-name').value = u.name;
   document.getElementById('u-email').value = email;
   document.getElementById('u-email').disabled = true;
-  document.getElementById('u-pass').value = '';
-  document.getElementById('u-pass').placeholder = 'اتركها فارغة (المستخدم سجّلها بنفسه)';
+  document.getElementById('u-pass-group').style.display = 'none'; // كلمة المرور صارت تُدار عبر Supabase Auth مباشرة
   document.getElementById('u-role').value = u.role || 'user';
   document.getElementById('u-error').textContent = '';
   populateRoleTemplates();
-  document.getElementById('u-roletemplate').value = u.roleName || '';
+  document.getElementById('u-roletemplate').value = '';
   buildPermsTable(u.perms || emptyPerms());
   onUserRoleChange();
-  document.getElementById('u-edit-completed').checked = !!u.editCompleted;
+  document.getElementById('u-edit-completed').checked = !!u.edit_completed;
   document.getElementById('user-modal-overlay').classList.add('open');
   document.body.style.overflow = 'hidden';
 };
@@ -6995,53 +7059,39 @@ window.closeUserModal = function() {
 
 window.saveUser = async function() {
   const name  = document.getElementById('u-name').value.trim();
-  const email = document.getElementById('u-email').value.trim().toLowerCase();
-  const pass  = document.getElementById('u-pass').value;
   const role  = document.getElementById('u-role').value;
   const err   = document.getElementById('u-error');
   err.textContent = '';
 
   if (!name) { err.textContent = 'أدخل الاسم'; return; }
-  if (!email.includes('@')) { err.textContent = 'البريد غير صحيح'; return; }
+  if (!userEditEmail) { closeUserModal(); return; } // لم يعد هناك إضافة يدوية — التسجيل ذاتي عبر Supabase Auth
 
   const perms = role === 'admin' ? fullPerms() : readPermsTable();
-  const roleName = role === 'admin' ? '' : (document.getElementById('u-roletemplate').value || '');
   const editCompleted = document.getElementById('u-edit-completed').checked;
+  const u = usersCache[userEditEmail];
+  const wasInactive = !u.active;
 
-  if (userEditEmail) {
-    // تعديل/تفعيل
-    const u = usersDB[userEditEmail];
-    const wasInactive = !u.active;
-    u.name = name;
-    u.role = role;
-    u.roleName = roleName;
-    u.perms = perms;
-    u.editCompleted = editCompleted;
-    u.active = true; // التعديل من الأدمن يفعّل الحساب
-    if (pass) {
-      if (pass.length < 8) { err.textContent = 'كلمة المرور 8 أحرف على الأقل'; return; }
-      u.salt = genSalt();
-      u.passHash = await hashPassword(pass, u.salt);
-    }
-    addAuditEntry(currentUser.name||'النظام', wasInactive?'تفعيل':'تعديل','—','—',
-      `${wasInactive?'تفعيل':'تعديل'} المستخدم ${name} (${userEditEmail})${roleName?' · دور: '+roleName:''}${editCompleted?' · صلاحية خاصة: تعديل العقود المكتملة':''}`,'');
-    if (userEditEmail === currentUser.email) { currentUser.role = role; currentUser.perms = perms; currentUser.editCompleted = editCompleted; applyPermissions(); }
-    closeUserModal();
-    renderUsers();
-    showToast(wasInactive ? '✓ تم تفعيل المستخدم' : '✓ تم حفظ التعديلات');
-    return;
-  }
-  // لم يعد هناك إضافة يدوية — التسجيل ذاتي
+  const { error } = await supabaseClient.from('app_users').update({
+    name, role, permissions: perms, edit_completed: editCompleted, active: true,
+  }).eq('email', userEditEmail);
+
+  if (error) { err.textContent = 'تعذّر الحفظ: ' + error.message; return; }
+
+  addAuditEntry(currentUser.name||'النظام', wasInactive?'تفعيل':'تعديل','—','—',
+    `${wasInactive?'تفعيل':'تعديل'} المستخدم ${name} (${userEditEmail})${editCompleted?' · صلاحية خاصة: تعديل العقود المكتملة':''}`,'');
+  if (userEditEmail === currentUser.email) { currentUser.role = role; currentUser.perms = perms; currentUser.editCompleted = editCompleted; applyPermissions(); }
   closeUserModal();
   renderUsers();
+  showToast(wasInactive ? '✓ تم تفعيل المستخدم' : '✓ تم حفظ التعديلات');
 };
 
-window.deactivateUser = function(email) {
-  const u = usersDB[email];
+window.deactivateUser = async function(email) {
+  const u = usersCache[email];
   if (!u || u.role === 'admin') return;
   document.getElementById('confirm-msg').textContent = `إيقاف دخول "${u.name}"؟ لن يقدر يدخل حتى تعيد تفعيله.`;
-  pendingDeleteFn = () => {
-    u.active = false;
+  pendingDeleteFn = async () => {
+    const { error } = await supabaseClient.from('app_users').update({ active: false }).eq('email', email);
+    if (error) { showToast('تعذّر إيقاف المستخدم'); return; }
     addAuditEntry(currentUser.name||'النظام','تعديل','—','—',`إيقاف دخول المستخدم ${u.name} (${email})`,'');
     renderUsers();
     showToast('⏸ تم إيقاف دخول المستخدم');
@@ -7051,11 +7101,12 @@ window.deactivateUser = function(email) {
 };
 
 window.deleteUser = function(email) {
-  const u = usersDB[email];
+  const u = usersCache[email];
   if (!u) return;
-  document.getElementById('confirm-msg').textContent = `هل تريد حذف المستخدم "${u.name}" (${email})؟`;
-  pendingDeleteFn = () => {
-    delete usersDB[email];
+  document.getElementById('confirm-msg').textContent = `هل تريد حذف المستخدم "${u.name}" (${email})؟ (يبقى بإمكانه محاولة الدخول لاحقاً لأن حسابه في Supabase Auth لا يُحذف تلقائياً هنا)`;
+  pendingDeleteFn = async () => {
+    const { error } = await supabaseClient.from('app_users').delete().eq('email', email);
+    if (error) { showToast('تعذّر حذف المستخدم'); return; }
     addAuditEntry(currentUser.name||'النظام','حذف','—','—',`حذف المستخدم ${u.name} (${email})`,'');
     renderUsers();
     showToast('🗑 تم حذف المستخدم');
@@ -7076,12 +7127,12 @@ document.addEventListener('click', e => {
   }
 });
 
-window.showProfileEdit = function() {
+window.showProfileEdit = async function() {
   document.getElementById('user-dropdown').classList.remove('open');
   const newName = prompt('الاسم الكامل:', currentUser.name);
   if (newName === null || !newName.trim()) return;
-  // update stored name
-  if (usersDB[currentUser.email]) usersDB[currentUser.email].name = newName.trim();
+  const { error } = await supabaseClient.from('app_users').update({ name: newName.trim() }).eq('email', currentUser.email);
+  if (error) { showToast('تعذّر تحديث الاسم'); return; }
   currentUser.name = newName.trim();
   document.getElementById('user-avatar').textContent      = currentUser.name.charAt(0);
   document.getElementById('user-badge-name').textContent  = currentUser.name;
@@ -9876,6 +9927,9 @@ window.exportToPDF = function(title, columns, rows, subtitle) {
   win.document.close();
   showToast('✓ تم تجهيز ملف PDF للطباعة');
 };
+
+// يستعيد جلسة Supabase Auth تلقائياً لو المستخدم مسجّل دخوله مسبقاً في هذا المتصفح
+window.restoreSession();
 
 }); // end DOMContentLoaded
 
