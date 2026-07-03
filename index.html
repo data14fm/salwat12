@@ -3455,6 +3455,11 @@ async function importContractsSheet(rows) {
     const rentalRaw = normNum(r[21]); // رسوم المحاور — تُقرأ كما هي بدون قسمة على عدد الحافلات
     const totalRaw  = normNum(r[22]);
 
+    // قيود سلامة أساسية — تمنع صف تالف بالإكسل من كتابة أرقام سالبة أو ضخمة بشكل غير منطقي بقاعدة البيانات
+    const MAX_REASONABLE_AMOUNT = 100_000_000;
+    if (buses < 0 || days < 0 || priceRaw < 0 || rentalRaw < 0 || totalRaw < 0) { stats.skipped++; continue; }
+    if (priceRaw > MAX_REASONABLE_AMOUNT || rentalRaw > MAX_REASONABLE_AMOUNT || totalRaw > MAX_REASONABLE_AMOUNT) { stats.skipped++; continue; }
+
     const price      = priceRaw ? Math.round((priceRaw / busesForRate) * 100) / 100 : 0;
     const rentalRate = rentalRaw; // القيمة الخام من الإكسل مباشرة (كما طلب المستخدم)
     const rentalCost = days * rentalRate; // إجمالي رسوم المحطة = أيام × القيمة الخام (لا يُضرب في عدد الحافلات)
