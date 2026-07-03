@@ -2886,6 +2886,76 @@ async function loadContracts() {
   (data||[]).forEach(row => contracts.push(contractFromRow(row, names)));
 }
 
+function fmtArDate(d) { return d ? new Date(d).toLocaleDateString('ar-SA',{day:'2-digit',month:'2-digit',year:'numeric'}) : ''; }
+
+// يزامن حقول القيمة/المتبقي/الحالة لعقد معيّن مع Supabase — يُستخدم بعد أي دفعة/خصم/تدفق يغيّرها محلياً
+async function syncContractFinancials(c) {
+  if (!c) return;
+  await supabaseClient.from('contracts').update({
+    total: c.total, original_total: c.originalTotal, remaining: c.rem, status: c.status,
+  }).eq('id', c.id);
+}
+
+// يحمّل الدفعات/الخصومات/الحافلات الإضافية/خصوماتها/الفواتير/جدولة الأقساط من Supabase
+async function loadFinancials() {
+  const [payRes, discRes, flowRes, flowDiscRes, invRes, schedRes] = await Promise.all([
+    supabaseClient.from('payments').select('*').order('id'),
+    supabaseClient.from('discounts').select('*').order('id'),
+    supabaseClient.from('flows').select('*').order('id'),
+    supabaseClient.from('flow_discounts').select('*').order('id'),
+    supabaseClient.from('invoices').select('*').order('id'),
+    supabaseClient.from('payment_schedules').select('*').order('id'),
+  ]);
+
+  paymentsLog.length = 0;
+  (payRes.data||[]).forEach(r => paymentsLog.push({
+    pid:r.id, contractId:r.contract_id, amount:Number(r.amount), method:r.method,
+    sender:r.sender||'', receiver:r.receiver||'', ref:r.ref||'', bankFrom:r.bank_from||'',
+    bankTo:r.bank_to||'', transferStatus:r.transfer_status||'', note:r.note||'', date: fmtArDate(r.paid_at),
+  }));
+
+  discountsLog.length = 0;
+  (discRes.data||[]).forEach(r => discountsLog.push({
+    did:r.id, contractId:r.contract_id, days:Number(r.days)||0, reason:r.reason||'', discType:r.disc_type||'',
+    note:r.note||'', amount:Number(r.amount)||0, discBuses:Number(r.disc_buses)||0,
+    operationDisc:Number(r.operation_disc)||0, rentalDisc:Number(r.rental_disc)||0, enteredBy:r.entered_by||'',
+    dateFrom:isoToDMY(r.date_from), dateTo:isoToDMY(r.date_to),
+    date: (isoToDMY(r.date_from)===isoToDMY(r.date_to)) ? isoToDMY(r.date_from) : `${isoToDMY(r.date_from)} — ${isoToDMY(r.date_to)}`,
+  }));
+
+  window.flowsLog.length = 0;
+  (flowRes.data||[]).forEach(r => window.flowsLog.push({
+    fid:r.id, contractId:r.contract_id, start:isoToDMY(r.start_date), end:isoToDMY(r.end_date),
+    startISO:r.start_date, endISO:r.end_date, dueISO:r.due_date, days:r.days, buses:r.buses, shift:r.shift||'',
+    amount:Number(r.amount)||0, note:r.note||'', opCost:Number(r.op_cost)||0, rnCost:Number(r.rn_cost)||0,
+    paid:Number(r.paid)||0, enteredBy:r.entered_by||'', entered: fmtArDate(r.created_at),
+  }));
+
+  flowDiscountsLog.length = 0;
+  (flowDiscRes.data||[]).forEach(r => flowDiscountsLog.push({
+    fdid:r.id, fid:r.flow_id, contractId:r.contract_id, days:Number(r.days)||0, reason:r.reason||'',
+    amount:Number(r.amount)||0, opDisc:Number(r.op_disc)||0, rnDisc:Number(r.rn_disc)||0,
+    dateFrom:isoToDMY(r.date_from), dateTo:isoToDMY(r.date_to), enteredBy:r.entered_by||'', note:r.note||'',
+    date: (isoToDMY(r.date_from)===isoToDMY(r.date_to)) ? isoToDMY(r.date_from) : `${isoToDMY(r.date_from)} — ${isoToDMY(r.date_to)}`,
+  }));
+
+  invoicesLog.length = 0;
+  (invRes.data||[]).forEach(r => invoicesLog.push({
+    id:r.id, contractId:r.contract_id, fromStr:isoToDMY(r.from_date), toStr:isoToDMY(r.to_date),
+    daysInPeriod:r.days_in_period, dailyRate:Number(r.daily_rate)||0, amount:Number(r.amount)||0,
+    savedAt: fmtArDate(r.saved_at),
+  }));
+
+  Object.keys(paySchedules).forEach(k => delete paySchedules[k]);
+  (schedRes.data||[]).forEach(r => {
+    (paySchedules[r.contract_id] = paySchedules[r.contract_id] || []).push({
+      id:r.id, num:r.installment_num, dueDate:isoToDMY(r.due_date), amount:Number(r.amount)||0,
+      status:r.status, paid:Number(r.paid)||0, paidDate: r.paid_date ? isoToDMY(r.paid_date) : null,
+    });
+  });
+  Object.values(paySchedules).forEach(arr => arr.sort((a,b) => a.num - b.num));
+}
+
 const statusBadge = {
   'نشط':           'badge-green',
   'مكتمل':         'badge-green',
@@ -3702,7 +3772,12 @@ window.saveContract = async function() {
       status: '', distributedPayment, parentId: pendingParentContractId,
     });
     if (schedule) {
-      paySchedules[newId] = schedule.map(r => ({ num: r.num, dueDate: r.due, amount: r.amount, status: 'بانتظار السداد' }));
+      const { data: schedRows, error: schedErr } = await supabaseClient.from('payment_schedules')
+        .insert(schedule.map(r => ({ contract_id: newId, installment_num: r.num, due_date: r.due, amount: r.amount, status: 'بانتظار السداد' })))
+        .select();
+      paySchedules[newId] = (schedErr ? schedule.map(r => ({ id:null, num: r.num, dueDate: r.due, amount: r.amount, status: 'بانتظار السداد', paid:0 }))
+        : schedRows.map(r => ({ id:r.id, num: r.installment_num, dueDate: isoToDMY(r.due_date), amount: Number(r.amount), status: r.status, paid:0 })));
+      if (schedErr) showToast('تعذّر حفظ جدول الأقساط: ' + schedErr.message);
     }
     addAuditEntry('النظام', 'إضافة', displayId || newId, hotel, `عقد جديد: ${hotel} · ${axis} · ${buses} حافلة · ${total.toLocaleString()} ريال`, contractStatus||'');
     addedNames.push(hotel);
@@ -3928,7 +4003,7 @@ window.renderDetailPayments = function(id) {
   }).join('');
 }
 
-window.editPayment = function(pid) {
+window.editPayment = async function(pid) {
   const p = paymentsLog.find(x => x.pid === pid);
   if (!p) return;
   const c = contracts.find(x => x.id === p.contractId);
@@ -3962,6 +4037,13 @@ window.editPayment = function(pid) {
     newNote
   );
 
+  const { error } = await supabaseClient.from('payments').update({
+    amount: newAmount, paid_at: dmyToISO(newDateStr.trim()), sender: newSender.trim(),
+    receiver: newReceiver.trim(), note: newNote.trim(),
+  }).eq('id', pid);
+  if (error) { showToast('تعذّر حفظ التعديل: ' + error.message); return; }
+  await syncContractFinancials(c);
+
   p.amount   = newAmount;
   p.date     = newDateStr.trim();
   p.sender   = newSender.trim();
@@ -3982,10 +4064,14 @@ window.deletePayment = function(pid) {
 
   document.getElementById('confirm-msg').textContent =
     `هل تريد حذف دفعة ${p.amount.toLocaleString()} ريال من عقد "${c.hotel}"؟`;
-  pendingDeleteFn = () => {
+  pendingDeleteFn = async () => {
+    const { error } = await supabaseClient.from('payments').delete().eq('id', pid);
+    if (error) { showToast('تعذّر حذف الدفعة: ' + error.message); return; }
+
     // restore rem
     c.rem = Math.min(c.total, c.rem + p.amount);
     c.status = computeContractStatus(c);
+    await syncContractFinancials(c);
 
     addAuditEntry(
       currentUser.name || 'النظام', 'حذف دفعة',
@@ -4035,7 +4121,7 @@ window.setPayMethod = function(method) {
   btnBank.style.fontWeight  = !isCash ? '500' : '400';
 };
 
-window.savePayment = function() {
+window.savePayment = async function() {
   const amountVal = parseFloat(document.getElementById('pay-amount').value);
   if (!amountVal || amountVal <= 0) { highlight('pay-amount'); return; }
 
@@ -4069,14 +4155,23 @@ window.savePayment = function() {
 
   const now = new Date();
   const dateStr = now.toLocaleDateString('ar-SA', { day:'2-digit', month:'2-digit', year:'numeric' });
+  const note = document.getElementById('pay-note').value.trim();
+  const { data: payRow, error: payErr } = await supabaseClient.from('payments').insert({
+    contract_id: activeContractId, amount: applied, method: currentPayMethod, sender, receiver,
+    note, ref: extraFields.ref||null, bank_from: extraFields.bankFrom||null, bank_to: extraFields.bankTo||null,
+    transfer_status: extraFields.transferStatus||null,
+  }).select().single();
+  if (payErr) { showToast('تعذّر حفظ الدفعة: ' + payErr.message); return; }
+  await syncContractFinancials(c);
+
   paymentsLog.push({
-    pid: Date.now() + Math.random(),
+    pid: payRow.id,
     contractId: activeContractId,
     amount:   applied,
     method:   currentPayMethod,
     sender,
     receiver,
-    note:     document.getElementById('pay-note').value.trim(),
+    note,
     date:     dateStr,
     ...extraFields,
   });
@@ -5531,7 +5626,7 @@ window.toggleDiscountForm = function() {
   }
 };
 
-window.saveDiscount = function() {
+window.saveDiscount = async function() {
   const reason = document.getElementById('disc-reason').value;
   const note   = document.getElementById('disc-note').value.trim();
   const dateFrom = document.getElementById('disc-date-from').value;
@@ -5572,15 +5667,23 @@ window.saveDiscount = function() {
   const toStr    = fmt(dateTo);
   const periodStr= fromStr === toStr ? fromStr : `${fromStr} — ${toStr}`;
 
+  const enteredBy = currentUser.name || 'النظام';
+  const { data: discRow, error: discErr } = await supabaseClient.from('discounts').insert({
+    contract_id: activeContractId, days, reason, disc_type: discType, note, amount: discAmount,
+    disc_buses: discBuses, operation_disc: operationDisc, rental_disc: rentalDisc,
+    entered_by: enteredBy, date_from: dateFrom, date_to: dateTo,
+  }).select().single();
+  if (discErr) { showToast('تعذّر حفظ الخصم: ' + discErr.message); return; }
+
   discountsLog.push({
-    did:        Date.now() + Math.random(),
+    did:        discRow.id,
     contractId: activeContractId,
     days, reason, discType, note,
     amount:     discAmount,
     discBuses:  discBuses,
     operationDisc,
     rentalDisc,
-    enteredBy:  currentUser.name || 'النظام',
+    enteredBy,
     dateFrom:   fromStr,
     dateTo:     toStr,
     date:       periodStr,
@@ -5588,6 +5691,7 @@ window.saveDiscount = function() {
 
   c.total = Math.max(0, c.total - discAmount);
   c.rem   = Math.max(0, c.rem   - discAmount);
+  await syncContractFinancials(c);
 
   const breakDown = `تشغيل: ${operationDisc.toLocaleString()} ر + محطة: ${rentalDisc.toLocaleString()} ر`;
   addAuditEntry(currentUser.name||'النظام','خصم',c.id,c.hotel,
@@ -5607,8 +5711,10 @@ window.deleteDiscount = function(did) {
   const c = contracts.find(x => x.id === d.contractId);
   document.getElementById('confirm-msg').textContent =
     `هل تريد حذف خصم "${d.reason}" (${d.days} يوم)؟`;
-  pendingDeleteFn = () => {
-    if (c) { c.total += d.amount; c.rem = Math.min(c.total, c.rem + d.amount); }
+  pendingDeleteFn = async () => {
+    const { error } = await supabaseClient.from('discounts').delete().eq('id', did);
+    if (error) { showToast('تعذّر حذف الخصم: ' + error.message); return; }
+    if (c) { c.total += d.amount; c.rem = Math.min(c.total, c.rem + d.amount); await syncContractFinancials(c); }
     const idx = discountsLog.findIndex(x => x.did === did);
     if (idx !== -1) discountsLog.splice(idx, 1);
     addAuditEntry(currentUser.name||'النظام','حذف خصم',d.contractId,c?c.hotel:'—',
@@ -5810,7 +5916,7 @@ window.closeInstModal = function() {
   window._pendingInstalment = null;
 };
 
-window.confirmInstalmentPaid = function() {
+window.confirmInstalmentPaid = async function() {
   const pending = window._pendingInstalment;
   if (!pending) return;
 
@@ -5908,16 +6014,38 @@ window.confirmInstalmentPaid = function() {
     const totalPaid = sched.reduce((s, r) => s + (r.paid || 0), 0);
     c.rem = Math.max(0, (c.originalTotal || c.total) - totalPaid);
     c.status = computeContractStatus(c);
+    await syncContractFinancials(c);
   }
 
+  if (row.id) {
+    await supabaseClient.from('payment_schedules').update({
+      amount: row.amount, status: row.status, paid: row.paid,
+      paid_date: row.paidDate ? dmyToISO(row.paidDate) : null,
+    }).eq('id', row.id);
+  }
+  if (nextRow && nextRow.id) {
+    await supabaseClient.from('payment_schedules').update({
+      amount: nextRow.amount, status: nextRow.status, paid: nextRow.paid,
+      paid_date: nextRow.paidDate ? dmyToISO(nextRow.paidDate) : null,
+    }).eq('id', nextRow.id);
+  }
+
+  const note = document.getElementById('inst-note').value.trim() || `الدفعة ${row.num} من الجدول`;
+  const { data: payRow, error: payErr } = await supabaseClient.from('payments').insert({
+    contract_id: contractId, amount, method: currentInstMethod, sender, receiver, note,
+    ref: extraFields.ref||null, bank_from: extraFields.bankFrom||null, bank_to: extraFields.bankTo||null,
+    transfer_status: extraFields.transferStatus||null,
+  }).select().single();
+  if (payErr) { showToast('تعذّر حفظ الدفعة: ' + payErr.message); return; }
+
   paymentsLog.push({
-    pid: Date.now() + Math.random(),
+    pid: payRow.id,
     contractId,
     amount,
     method:   currentInstMethod,
     sender,
     receiver,
-    note:     document.getElementById('inst-note').value.trim() || `الدفعة ${row.num} من الجدول`,
+    note,
     date:     now,
     ...extraFields,
   });
@@ -5983,7 +6111,7 @@ window.closeEditInstModal = function() {
   window._editingInst = null;
 };
 
-window.confirmEditInstalment = function() {
+window.confirmEditInstalment = async function() {
   const ed = window._editingInst;
   if (!ed) return;
   const { contractId, rowIndex } = ed;
@@ -6057,6 +6185,14 @@ window.confirmEditInstalment = function() {
     const totalPaid = sched.reduce((s, r) => s + (r.paid || 0), 0);
     c.rem = Math.max(0, (c.originalTotal || c.total) - totalPaid);
     c.status = computeContractStatus(c);
+    await syncContractFinancials(c);
+  }
+
+  if (row.id) {
+    await supabaseClient.from('payment_schedules').update({
+      amount: row.amount, due_date: dmyToISO(row.dueDate), paid: row.paid, status: row.status,
+      paid_date: row.paidDate ? dmyToISO(row.paidDate) : null,
+    }).eq('id', row.id);
   }
 
   addAuditEntry(currentUser.name||'النظام','تعديل',contractId,c?c.hotel:'—',
@@ -7253,6 +7389,7 @@ loadDb().then(async () => {
   renderDb();
   if (window.populateContractDropdowns) populateContractDropdowns();
   await loadContracts();
+  await loadFinancials();
   if (window.filterContracts) filterContracts();
   if (window.renderReports) renderReports();
   if (window.renderOperations) renderOperations();
@@ -8691,7 +8828,7 @@ function invoicePeriodData() {
   const dailyRate = c.days > 0 ? c.total / c.days : 0;
   const amount = dailyRate * daysInPeriod;
   const fmt = d => d.split('-').reverse().join('/');
-  return { c, fromStr: fmt(fromVal), toStr: fmt(toVal), daysInPeriod, dailyRate, amount };
+  return { c, fromVal, toVal, fromStr: fmt(fromVal), toStr: fmt(toVal), daysInPeriod, dailyRate, amount };
 }
 
 window.exportInvoice = function(type) {
@@ -8707,12 +8844,17 @@ window.exportInvoice = function(type) {
 
 /* ═══ سجل الفوترة الشهرية — حفظ نتائج الفوترة المحسوبة ═══ */
 
-window.saveInvoice = function() {
+window.saveInvoice = async function() {
   const data = invoicePeriodData();
   if (!data) { showToast('اختر عقداً وفترة صحيحة أولاً'); return; }
-  const { c, fromStr, toStr, daysInPeriod, dailyRate, amount } = data;
+  const { c, fromVal, toVal, fromStr, toStr, daysInPeriod, dailyRate, amount } = data;
+  const { data: row, error } = await supabaseClient.from('invoices').insert({
+    contract_id: c.id, from_date: fromVal, to_date: toVal, days_in_period: daysInPeriod,
+    daily_rate: dailyRate, amount,
+  }).select().single();
+  if (error) { showToast('تعذّر حفظ الفوترة: ' + error.message); return; }
   invoicesLog.push({
-    id: Date.now() + Math.random(),
+    id: row.id,
     contractId: c.id,
     fromStr, toStr, daysInPeriod, dailyRate, amount,
     savedAt: new Date().toLocaleDateString('ar-SA',{day:'2-digit',month:'2-digit',year:'numeric'}),
@@ -8721,7 +8863,9 @@ window.saveInvoice = function() {
   showToast(`✓ تم حفظ الفوترة — عقد #${c.id}`);
 };
 
-window.deleteInvoice = function(id) {
+window.deleteInvoice = async function(id) {
+  const { error } = await supabaseClient.from('invoices').delete().eq('id', id);
+  if (error) { showToast('تعذّر حذف الفوترة: ' + error.message); return; }
   const idx = invoicesLog.findIndex(i => i.id === id);
   if (idx !== -1) invoicesLog.splice(idx, 1);
   renderInvoiceLog();
@@ -9333,7 +9477,7 @@ window.previewDistribution = function() {
   }
 };
 
-window.saveDistribution = function() {
+window.saveDistribution = async function() {
   const client = document.getElementById('dist-client').value;
   const amount = parseFloat(document.getElementById('dist-amount').value) || 0;
   const method = document.getElementById('dist-method').value;
@@ -9376,13 +9520,22 @@ window.saveDistribution = function() {
     remaining -= applied;
     c.rem = Math.max(0, c.rem - applied);
     c.status = computeContractStatus(c);
+    await syncContractFinancials(c);
+
+    const payNote = note ? `${note} (دفعة موزّعة)` : 'دفعة موزّعة';
+    const { data: payRow, error: payErr } = await supabaseClient.from('payments').insert({
+      contract_id: c.id, amount: applied, method, note: payNote,
+      sender: payFields.sender||null, receiver: payFields.receiver||null, ref: payFields.ref||null,
+      bank_from: payFields.bankFrom||null, bank_to: payFields.bankTo||null, transfer_status: payFields.transferStatus||null,
+    }).select().single();
+    if (payErr) { showToast('تعذّر حفظ دفعة موزّعة: ' + payErr.message); continue; }
 
     paymentsLog.push({
-      pid: Date.now() + Math.random(),
+      pid: payRow.id,
       contractId: c.id,
       amount: applied,
       method,
-      note: note ? `${note} (دفعة موزّعة)` : 'دفعة موزّعة',
+      note: payNote,
       date: now,
       ...payFields,
     });
@@ -9579,7 +9732,7 @@ window.onFlowDiscDaysChange = function(fid) {
   prev.textContent = `${days} يوم × ${f.buses} باص × (${(c?.price||0).toLocaleString()} + ${(c?.rental||0).toLocaleString()}) = ${amt.toLocaleString()} ر`;
 };
 
-window.saveFlowDiscount = function(fid) {
+window.saveFlowDiscount = async function(fid) {
   const f = flowsLog.find(x => x.fid === fid);
   if (!f) return;
   const c = contracts.find(x => x.id === f.contractId);
@@ -9604,18 +9757,26 @@ window.saveFlowDiscount = function(fid) {
   const fmt = d => d.split('-').reverse().join('/');
   const fromStr = fmt(dateFrom), toStr = fmt(dateTo);
 
+  const enteredBy = currentUser.name || 'النظام';
+  const { data: fdRow, error: fdErr } = await supabaseClient.from('flow_discounts').insert({
+    flow_id: fid, contract_id: c.id, days, reason, amount, op_disc: opDisc, rn_disc: rnDisc,
+    date_from: dateFrom, date_to: dateTo, entered_by: enteredBy, note,
+  }).select().single();
+  if (fdErr) { showToast('تعذّر حفظ الخصم: ' + fdErr.message); return; }
+
   flowDiscountsLog.push({
-    fdid: Date.now() + Math.random(),
+    fdid: fdRow.id,
     fid, contractId: c.id,
     days, reason, amount, opDisc, rnDisc,
     dateFrom: fromStr, dateTo: toStr,
     date: fromStr === toStr ? fromStr : `${fromStr} — ${toStr}`,
-    enteredBy: currentUser.name || 'النظام', note,
+    enteredBy, note,
   });
 
   c.total = Math.max(0, c.total - amount);
   c.rem   = Math.max(0, c.rem   - amount);
   c.status = computeContractStatus(c);
+  await syncContractFinancials(c);
 
   addAuditEntry(currentUser.name||'النظام','خصم حافلة إضافية',c.id,c.hotel,
     `خصم ${days} يوم على حافلة إضافية (${f.buses} باص) = ${amount.toLocaleString()} ر (تشغيل ${opDisc.toLocaleString()} + محطة ${rnDisc.toLocaleString()}) · ${reason}`,'');
@@ -9627,11 +9788,13 @@ window.saveFlowDiscount = function(fid) {
   showToast(`✓ تم خصم ${amount.toLocaleString()} ريال من الحافلة الإضافية`);
 };
 
-window.deleteFlowDiscount = function(fdid) {
+window.deleteFlowDiscount = async function(fdid) {
   const d = flowDiscountsLog.find(x => x.fdid === fdid);
   if (!d) return;
+  const { error } = await supabaseClient.from('flow_discounts').delete().eq('id', fdid);
+  if (error) { showToast('تعذّر حذف الخصم: ' + error.message); return; }
   const c = contracts.find(x => x.id === d.contractId);
-  if (c) { c.total += d.amount; c.rem = Math.min(c.total, c.rem + d.amount); c.status = computeContractStatus(c); }
+  if (c) { c.total += d.amount; c.rem = Math.min(c.total, c.rem + d.amount); c.status = computeContractStatus(c); await syncContractFinancials(c); }
   const idx = flowDiscountsLog.findIndex(x => x.fdid === fdid);
   if (idx !== -1) flowDiscountsLog.splice(idx, 1);
   addAuditEntry(currentUser.name||'النظام','حذف خصم حافلة',d.contractId,c?c.hotel:'—',`حُذف خصم ${d.days} يوم · ${d.reason} · ${d.amount.toLocaleString()} ر`,'');
@@ -9756,7 +9919,7 @@ window.closeFlowModal = function() {
 };
 
 /* ── حفظ حافلة إضافية ── */
-window.saveFlow = function() {
+window.saveFlow = async function() {
   const c = contracts.find(x => x.id === activeContractId);
   if (!c) return;
   const start = document.getElementById('fl-start').value;
@@ -9779,16 +9942,24 @@ window.saveFlow = function() {
 
   const fmt = d => d.split('-').reverse().join('/');
   const now  = new Date().toLocaleDateString('ar-SA',{day:'2-digit',month:'2-digit',year:'numeric'});
+  const enteredBy = currentUser.name || 'النظام';
+
+  const { data: flowRow, error: flowErr } = await supabaseClient.from('flows').insert({
+    contract_id: activeContractId, start_date: start, end_date: end, due_date: end,
+    days, buses, shift, price, rental_rate: rental, op_cost: opCost, rn_cost: rnCost, amount, paid: 0,
+    note, entered_by: enteredBy,
+  }).select().single();
+  if (flowErr) { showToast('تعذّر حفظ الحافلة الإضافية: ' + flowErr.message); return; }
 
   flowsLog.push({
-    fid: Date.now() + Math.random(),
+    fid: flowRow.id,
     contractId: activeContractId,
     start: fmt(start), end: fmt(end),
     startISO: start, endISO: end, dueISO: end,
     days, buses, shift, amount, note,
     opCost, rnCost,
     paid: 0,
-    enteredBy: currentUser.name || 'النظام',
+    enteredBy,
     entered:   now,
   });
 
@@ -9796,6 +9967,7 @@ window.saveFlow = function() {
   c.total += amount;
   c.rem   += amount;
   c.status = computeContractStatus(c);
+  await syncContractFinancials(c);
 
   const breakDown = `تشغيل: ${opCost.toLocaleString()} + محطة: ${rnCost.toLocaleString()}`;
   addAuditEntry(currentUser.name||'النظام','إضافة حافلة',c.id,c.hotel,
@@ -9826,8 +9998,10 @@ window.deleteFlow = function(fid) {
   const c = contracts.find(x => x.id === f.contractId);
   document.getElementById('confirm-msg').textContent =
     `هل تريد حذف حافلة ${f.buses} باص (${f.amount.toLocaleString()} ريال)؟`;
-  pendingDeleteFn = () => {
-    // حذف خصومات الحافلة المحذوفة أولاً وإعادة قيمتها
+  pendingDeleteFn = async () => {
+    const { error } = await supabaseClient.from('flows').delete().eq('id', fid);
+    if (error) { showToast('تعذّر حذف الحافلة: ' + error.message); return; }
+    // حذف خصومات الحافلة المحذوفة أولاً وإعادة قيمتها (flow_discounts تُحذف تلقائياً عبر cascade)
     const relatedDiscs = flowDiscountsLog.filter(d => d.fid === fid);
     const discsRefund  = relatedDiscs.reduce((s,d) => s + (d.amount||0), 0);
     for (let i = flowDiscountsLog.length - 1; i >= 0; i--) {
@@ -9841,6 +10015,7 @@ window.deleteFlow = function(fid) {
       c.total = Math.max(0, c.total - netRemove);
       c.rem   = Math.max(0, c.rem   - netRemove);
       c.status = computeContractStatus(c);
+      await syncContractFinancials(c);
     }
     addAuditEntry(currentUser.name||'النظام','حذف حافلة',f.contractId,c?c.hotel:'—',
       `حُذفت حافلة ${f.buses} باص · ${f.amount.toLocaleString()} ريال${relatedDiscs.length?' + '+relatedDiscs.length+' خصم':''} · الحالي: ${c?c.total.toLocaleString():'—'}`,'');
