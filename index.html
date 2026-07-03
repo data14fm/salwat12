@@ -3241,18 +3241,25 @@ async function importFromWorkbook(wb) {
   }
 
   let dbStats = { clients:0, hotels:0, axes:0, carriers:0, statuses:0, discounts:0 };
-  if (dbSheetName) {
-    dbStats = await importDatabaseSheet(XLSX.utils.sheet_to_json(wb.Sheets[dbSheetName], { header:1, defval:'' }));
-  }
-
   let contractStats = { added:0, skipped:0 };
-  if (contractsSheetName) {
-    contractStats = await importContractsSheet(XLSX.utils.sheet_to_json(wb.Sheets[contractsSheetName], { header:1, defval:'' }));
+  let importError = null;
+  try {
+    if (dbSheetName) {
+      dbStats = await importDatabaseSheet(XLSX.utils.sheet_to_json(wb.Sheets[dbSheetName], { header:1, defval:'' }));
+    }
+    if (contractsSheetName) {
+      contractStats = await importContractsSheet(XLSX.utils.sheet_to_json(wb.Sheets[contractsSheetName], { header:1, defval:'' }));
+    }
+  } catch (err) {
+    importError = err;
   }
 
+  // نعيد تحميل البيانات ونحدّث كل الشاشات دائماً — حتى لو صار خطأ منتصف الاستيراد،
+  // عشان الموقع يعرض فوراً كل ما نجح حفظه فعلياً بدل ما يحتاج المستخدم يحدّث الصفحة يدوياً
   await loadDb();
   await loadContracts();
   await loadFinancials();
+  await loadClientBalances();
 
   renderDb();
   if (window.populateContractDropdowns) populateContractDropdowns();
@@ -3264,6 +3271,11 @@ async function importFromWorkbook(wb) {
   if (window.renderSettlement)      renderSettlement();
   if (window.renderClientBalances)  renderClientBalances();
   if (window.renderPaymentsLogAll)  renderPaymentsLogAll();
+
+  if (importError) {
+    showToast('⚠ توقّف الاستيراد بسبب خطأ — تم حفظ وعرض كل ما نجح قبل التوقف: ' + (importError.message || importError));
+    return;
+  }
 
   addAuditEntry(currentUser.name||'النظام', 'إضافة', '—', '—',
     `استيراد إكسل: ${contractStats.added} عقد جديد · ${dbStats.clients} عميل جديد · ${dbStats.hotels} فندق جديد · ${dbStats.axes} محور جديد · ${dbStats.carriers} ناقل جديد`,
@@ -6918,7 +6930,8 @@ window.doLogin = async function() {
 
 // يجلب صف app_users المرتبط بالمستخدم المسجَّل دخوله في Supabase Auth،
 // ويطبّق بوّابة تفعيل الأدمن (منفصلة عن تأكيد البريد الذي تكفّل به Supabase Auth تلقائياً)
-async function loadCurrentUserProfile(email) {
+async function loadCurrentUserProfile(email, opts) {
+  const signOutOnFailure = !opts || opts.signOutOnFailure !== false;
   const err = document.getElementById('li-error');
   const { data: profile, error: profileErr } = await supabaseClient
     .from('app_users')
@@ -6927,15 +6940,17 @@ async function loadCurrentUserProfile(email) {
     .single();
 
   if (profileErr || !profile) {
+    // فشل مؤقت (شبكة/تزامن الجلسة) ما يعني إن الحساب غلط — ما نسجّل خروج المستخدم
+    // على أساس هذا وحده، إلا لو كانت محاولة تسجيل دخول يدوية فعلية
     if (err) err.textContent = 'تعذّر تحميل بيانات الحساب — حاول مرة أخرى';
-    await supabaseClient.auth.signOut();
-    return;
+    if (signOutOnFailure) await supabaseClient.auth.signOut();
+    return false;
   }
 
   if (!profile.active) {
     if (err) err.textContent = '⏳ حسابك بانتظار تفعيل الأدمن — لا يمكنك الدخول بعد';
-    await supabaseClient.auth.signOut();
-    return;
+    if (signOutOnFailure) await supabaseClient.auth.signOut();
+    return false;
   }
 
   currentUser = {
@@ -6946,6 +6961,7 @@ async function loadCurrentUserProfile(email) {
     editCompleted: !!profile.edit_completed,
   };
   applyLogin();
+  return true;
 }
 
 function applyLogin() {
@@ -7022,8 +7038,14 @@ window.doLogout = async function() {
 // يستعيد الجلسة تلقائياً لو المستخدم كان مسجّلاً دخوله سابقاً في نفس المتصفح
 window.restoreSession = async function() {
   const { data: { session } } = await supabaseClient.auth.getSession();
-  if (session && session.user && session.user.email) {
-    await loadCurrentUserProfile(session.user.email);
+  if (!session || !session.user || !session.user.email) return;
+
+  // عند استعادة جلسة قائمة (تحديث الصفحة) لا نسجّل الخروج على أول فشل —
+  // قد يكون تزامناً مؤقتاً بين الجلسة المخزّنة محلياً وطلب القراءة من القاعدة، فنعيد المحاولة مرة واحدة
+  const ok = await loadCurrentUserProfile(session.user.email, { signOutOnFailure: false });
+  if (!ok) {
+    await new Promise(r => setTimeout(r, 900));
+    await loadCurrentUserProfile(session.user.email, { signOutOnFailure: false });
   }
 };
 
