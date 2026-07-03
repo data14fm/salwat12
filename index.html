@@ -4068,63 +4068,50 @@ renderCollectionPage();
 /* ══════════════════════════════
    DATABASE PAGE
 ══════════════════════════════ */
-const db = {
-  clients: [
-    { id:1, name:'شركة التقوى', contact:'', notes:'', hotelIds:[1,4,7] },
-    { id:2, name:'مؤسسة المشاعر', contact:'', notes:'', hotelIds:[2,3,5,8] },
-  ],
-  hotels: [
-    { id:1, name:'ميزاب السابق 2',  location:'غرب الجمرات',     axis:'باب علي',          notes:'' },
-    { id:2, name:'التقوى الماسي',    location:'شعب عامر',        axis:'شعب عامر',         notes:'' },
-    { id:3, name:'ام من ملينيوم',    location:'ريع بخش',        axis:'ريع بخش',          notes:'' },
-    { id:4, name:'اركان بكة',        location:'منطقة 4',        axis:'باب علي',          notes:'' },
-    { id:5, name:'اثير المشاعر',     location:'جبل الكعبة - غرب',axis:'جبل الكعبة - غرب', notes:'' },
-    { id:6, name:'اجم',              location:'غرب الجمرات',     axis:'باب علي',          notes:'' },
-    { id:7, name:'ابراج الجابر',     location:'غرب الجمرات',     axis:'باب علي',          notes:'' },
-    { id:8, name:'فنادق الضيافة',    location:'جبل الكعبة - غرب',axis:'جبل الكعبة - غرب', notes:'' },
-  ],
-  axes: [
-    { id:1, name:'كدي',               operator:'حافل',         routes:['عادي'],                    points:['كدي'],                       type:'BabAli' },
-    { id:2, name:'شعب عامر',          operator:'حافل',         routes:['عادي'],                    points:['شعب عامر'],                   type:'Normal' },
-    { id:3, name:'ريع بخش',           operator:'دله',          routes:['عادي'],                    points:['ريع بخش'],                    type:'Normal' },
-    { id:4, name:'جبل الكعبة - شرق',  operator:'رواحل',        routes:['عادي'],                    points:['جبل الكعبة - شرق'],           type:'Normal' },
-    { id:5, name:'جبل الكعبة - غرب',  operator:'رواحل',        routes:['عادي'],                    points:['جبل الكعبة - غرب'],           type:'Normal' },
-    { id:6, name:'باب علي',           operator:'رواحل',        routes:['عادي','ترددي المظلات'],    points:['غرب الجمرات','منطقة 2','منطقة 3','منطقة 4','منطقة 5','منطقة 6'], type:'BabAli' },
-    { id:7, name:'المدينة المنورة',    operator:'رواحل',        routes:['عادي'],                    points:['المدينة المنورة'],             type:'Normal' },
-    { id:8, name:'جرول',              operator:'مواكب الخير',  routes:['عادي'],                    points:['جرول'],                       type:'Normal' },
-    { id:9, name:'المسخوطة',          operator:'قايد',         routes:['عادي'],                    points:['المسخوطة'],                   type:'Normal' },
-  ],
-  carriers: [
-    { id:1, name:'رواحل',        notes:'الناقل الرئيسي لمعظم المحاور' },
-    { id:2, name:'دله',          notes:'ريع بخش' },
-    { id:3, name:'حافل',         notes:'كدي وشعب عامر' },
-    { id:4, name:'مواكب الخير',  notes:'جرول' },
-    { id:5, name:'قايد',         notes:'المسخوطة' },
-  ],
-  statuses: [
-    { id:1, name:'تم توقيع العقد',              color:'#1E8A60', desc:'تم التوقيع ولم يتم السداد بعد' },
-    { id:2, name:'تم توقيع العقد + السداد',     color:'#0B3D2E', desc:'توقيع وسداد كامل' },
-    { id:3, name:'تم سداد كامل المبلغ',         color:'#0B3D2E', desc:'مسدد بالكامل' },
-    { id:4, name:'تم سداد دفعة من المبلغ',     color:'#C9A84C', desc:'دفعة جزئية' },
-    { id:5, name:'لم يتم التوقيع أو السداد',   color:'#7A7874', desc:'لم يبدأ أي إجراء' },
-    { id:6, name:'تم ارسال العقد',              color:'#3B8BD4', desc:'بانتظار التوقيع' },
-    { id:7, name:'بدون عقد وتم السداد',        color:'#6B4E10', desc:'تم السداد بدون عقد رسمي' },
-  ],
-  discount: [
-    { id:1, reason:'بداية في الوردية المسائية', notes:'' },
-    { id:2, reason:'نهاية في الوردية الصباحية', notes:'' },
-    { id:3, reason:'عطل',                        notes:'عطل مؤقت للحافلة' },
-    { id:4, reason:'عجز',                        notes:'' },
-    { id:5, reason:'أخرى',                       notes:'' },
-  ],
-  classify: [
-    { id:1, name:'BabAli',          type:'محور',  notes:'محاور باب علي والمناطق' },
-    { id:2, name:'Normal',          type:'محور',  notes:'المحاور العادية' },
-    { id:3, name:'عادي',            type:'مسار', notes:'مسار تشغيل عادي' },
-    { id:4, name:'ترددي المظلات',   type:'مسار', notes:'مسار ترددي تحت المظلات' },
-  ],
-};
-let dbNextId = { clients:3, hotels:9, axes:10, carriers:6, statuses:8, discount:6, classify:5 };
+let db = { clients: [], hotels: [], axes: [], carriers: [], statuses: [], discount: [], classify: [] };
+
+// أسماء جداول Supabase المقابلة لكل مفتاح محلي في db
+const DB_SUPA_TABLE = { clients:'clients', hotels:'hotels', axes:'axes', carriers:'carriers', statuses:'contract_statuses', discount:'discount_reasons', classify:'classifications' };
+
+// يحمّل كل جداول البيانات المرجعية من Supabase ويبنيها بنفس الشكل اللي تتوقعه بقية الكود
+// (axis/operator كأسماء نصية بدل IDs، عشان ما نغيّر باقي منطق التطبيق)
+async function loadDb() {
+  const [clientsRes, hotelsRes, axesRes, carriersRes, statusesRes, discountRes, classifyRes, chRes] = await Promise.all([
+    supabaseClient.from('clients').select('*').order('id'),
+    supabaseClient.from('hotels').select('*').order('id'),
+    supabaseClient.from('axes').select('*').order('id'),
+    supabaseClient.from('carriers').select('*').order('id'),
+    supabaseClient.from('contract_statuses').select('*').order('id'),
+    supabaseClient.from('discount_reasons').select('*').order('id'),
+    supabaseClient.from('classifications').select('*').order('id'),
+    supabaseClient.from('client_hotels').select('*'),
+  ]);
+
+  const carrierNameById = {};
+  (carriersRes.data||[]).forEach(c => { carrierNameById[c.id] = c.name; });
+  db.carriers = (carriersRes.data||[]).map(c => ({ id:c.id, name:c.name, notes:c.notes||'' }));
+
+  const axisNameById = {};
+  db.axes = (axesRes.data||[]).map(a => {
+    axisNameById[a.id] = a.name;
+    return { id:a.id, name:a.name, operator:carrierNameById[a.operator_id]||'', routes:a.routes||[], points:a.points||[], type:a.type||'' };
+  });
+
+  db.hotels = (hotelsRes.data||[]).map(h => ({ id:h.id, name:h.name, location:h.location||'', axis:axisNameById[h.axis_id]||'', notes:h.notes||'' }));
+
+  const hotelIdsByClient = {};
+  (chRes.data||[]).forEach(r => { (hotelIdsByClient[r.client_id] = hotelIdsByClient[r.client_id] || []).push(r.hotel_id); });
+  db.clients = (clientsRes.data||[]).map(c => ({ id:c.id, name:c.name, contact:c.contact||'', notes:c.notes||'', hotelIds:hotelIdsByClient[c.id]||[] }));
+
+  db.statuses = (statusesRes.data||[]).map(s => ({ id:s.id, name:s.name, color:s.color||'', desc:s.description||'' }));
+  db.discount = (discountRes.data||[]).map(d => ({ id:d.id, reason:d.reason, notes:d.notes||'' }));
+  db.classify = (classifyRes.data||[]).map(c => ({ id:c.id, name:c.name, type:c.type, notes:c.notes||'' }));
+
+  // مستخدَم فقط من ميزة استيراد الإكسل القديمة (لسا ما ربطناها بقاعدة البيانات) — تمنعها من التعطل
+  const maxId = arr => arr.length ? Math.max(...arr.map(x => x.id)) + 1 : 1;
+  dbNextId = { clients:maxId(db.clients), hotels:maxId(db.hotels), axes:maxId(db.axes), carriers:maxId(db.carriers), statuses:maxId(db.statuses), discount:maxId(db.discount), classify:maxId(db.classify) };
+}
+let dbNextId = { clients:1, hotels:1, axes:1, carriers:1, statuses:1, discount:1, classify:1 };
 let currentDbType = null;
 let dbEditTable = null;
 let pendingDeleteFn = null;
@@ -4258,15 +4245,18 @@ window.toggleNewHotelForm = function() {
 };
 
 // حفظ الفندق الجديد في قاعدة بيانات الفنادق + ربطه تلقائياً بهذا العميل
-window.saveNewHotelInline = function() {
+window.saveNewHotelInline = async function() {
   const name = document.getElementById('newhotel-name').value.trim();
   if (!name) { highlight('newhotel-name'); return; }
   const location = document.getElementById('newhotel-location').value.trim();
   const axis     = document.getElementById('newhotel-axis').value;
   const notes    = document.getElementById('newhotel-notes').value.trim();
 
-  const newId = dbNextId.hotels++;
-  db.hotels.push({ id: newId, name, location, axis, notes });
+  const axisObj = db.axes.find(a => a.name === axis);
+  const { data, error } = await supabaseClient.from('hotels').insert({ name, location, axis_id: axisObj ? axisObj.id : null, notes }).select().single();
+  if (error) { showToast('تعذّر حفظ الفندق: ' + error.message); return; }
+  const newId = data.id;
+  await loadDb();
   addAuditEntry(currentUser.name||'النظام','إضافة','—',name,
     `إضافة فندق جديد من نموذج العميل: ${name}${location?' · '+location:''}${axis?' · محور: '+axis:''}`,'');
   if (window.renderDb) renderDb();
@@ -4345,11 +4335,17 @@ const dbForms = {
         <div id="client-hotel-noresults" style="display:none;text-align:center;padding:10px;color:var(--ink-3);font-size:12px;">لا توجد نتائج مطابقة — جرّب «+ فندق جديد»</div>
       </div>
     </div>`; },
-    save: () => {
+    save: async () => {
       const name = document.getElementById('db-f1').value.trim();
       if (!name) { highlight('db-f1'); return false; }
       const hotelIds = [...document.querySelectorAll('.client-hotel-cb:checked')].map(cb => parseInt(cb.value));
-      db.clients.push({ id:dbNextId.clients++, name, contact:document.getElementById('db-f2').value.trim(), notes:document.getElementById('db-f3').value.trim(), hotelIds });
+      const contact = document.getElementById('db-f2').value.trim();
+      const notes = document.getElementById('db-f3').value.trim();
+      const { data, error } = await supabaseClient.from('clients').insert({ name, contact, notes }).select().single();
+      if (error) { showToast('تعذّر حفظ العميل: ' + error.message); return false; }
+      if (hotelIds.length) {
+        await supabaseClient.from('client_hotels').insert(hotelIds.map(hid => ({ client_id: data.id, hotel_id: hid })));
+      }
       return name;
     },
     fill: (item) => {
@@ -4361,16 +4357,27 @@ const dbForms = {
         if (cb) cb.checked = true;
       });
     },
-    update: (id) => {
+    update: async (id) => {
       const item = db.clients.find(x => x.id === id);
       if (!item) return false;
       const name = document.getElementById('db-f1').value.trim();
       if (!name) { highlight('db-f1'); return false; }
       const oldName = item.name;
+      const contact = document.getElementById('db-f2').value.trim();
+      const notes = document.getElementById('db-f3').value.trim();
+      const newHotelIds = [...document.querySelectorAll('.client-hotel-cb:checked')].map(cb => parseInt(cb.value));
+
+      const { error } = await supabaseClient.from('clients').update({ name, contact, notes }).eq('id', id);
+      if (error) { showToast('تعذّر حفظ التعديلات: ' + error.message); return false; }
+      await supabaseClient.from('client_hotels').delete().eq('client_id', id);
+      if (newHotelIds.length) {
+        await supabaseClient.from('client_hotels').insert(newHotelIds.map(hid => ({ client_id: id, hotel_id: hid })));
+      }
+
       item.name = name;
-      item.contact = document.getElementById('db-f2').value.trim();
-      item.notes = document.getElementById('db-f3').value.trim();
-      item.hotelIds = [...document.querySelectorAll('.client-hotel-cb:checked')].map(cb => parseInt(cb.value));
+      item.contact = contact;
+      item.notes = notes;
+      item.hotelIds = newHotelIds;
       if (oldName && oldName !== name) {
         let affected = 0;
         contracts.forEach(c => { if (c.client === oldName) { c.client = name; affected++; } });
@@ -4404,10 +4411,15 @@ const dbForms = {
       </div>
       <div class="form-group full"><label class="form-label">ملاحظات</label><input class="form-input" id="db-f4" placeholder="اختياري"></div>
     </div>`,
-    save: () => {
+    save: async () => {
       const name = document.getElementById('db-f1').value.trim();
       if (!name) { highlight('db-f1'); return false; }
-      db.hotels.push({ id:dbNextId.hotels++, name, location:document.getElementById('db-f2').value.trim(), axis:document.getElementById('db-f3').value, notes:document.getElementById('db-f4').value.trim() });
+      const location = document.getElementById('db-f2').value.trim();
+      const axisName = document.getElementById('db-f3').value;
+      const notes = document.getElementById('db-f4').value.trim();
+      const axisObj = db.axes.find(a => a.name === axisName);
+      const { error } = await supabaseClient.from('hotels').insert({ name, location, axis_id: axisObj ? axisObj.id : null, notes });
+      if (error) { showToast('تعذّر حفظ الفندق: ' + error.message); return false; }
       return name;
     },
     fill: (item) => {
@@ -4416,16 +4428,22 @@ const dbForms = {
       document.getElementById('db-f3').value = item.axis || '';
       document.getElementById('db-f4').value = item.notes || '';
     },
-    update: (id) => {
+    update: async (id) => {
       const item = db.hotels.find(x => x.id === id);
       if (!item) return false;
       const name = document.getElementById('db-f1').value.trim();
       if (!name) { highlight('db-f1'); return false; }
       const oldName = item.name;
+      const location = document.getElementById('db-f2').value.trim();
+      const axisName = document.getElementById('db-f3').value;
+      const notes = document.getElementById('db-f4').value.trim();
+      const axisObj = db.axes.find(a => a.name === axisName);
+      const { error } = await supabaseClient.from('hotels').update({ name, location, axis_id: axisObj ? axisObj.id : null, notes }).eq('id', id);
+      if (error) { showToast('تعذّر حفظ التعديلات: ' + error.message); return false; }
       item.name = name;
-      item.location = document.getElementById('db-f2').value.trim();
-      item.axis = document.getElementById('db-f3').value;
-      item.notes = document.getElementById('db-f4').value.trim();
+      item.location = location;
+      item.axis = axisName;
+      item.notes = notes;
       if (oldName && oldName !== name) {
         let affected = 0;
         contracts.forEach(c => { if (c.hotel === oldName) { c.hotel = name; affected++; } });
@@ -4454,12 +4472,17 @@ const dbForms = {
       <div class="form-group full"><label class="form-label">المسارات (افصل بفاصلة)</label><input class="form-input" id="db-f4" value="عادي"></div>
       <div class="form-group full"><label class="form-label">نقاط الفرز (افصل بفاصلة)</label><input class="form-input" id="db-f5" placeholder="اسم النقطة"></div>
     </div>`; },
-    save: () => {
+    save: async () => {
       const name = document.getElementById('db-f1').value.trim();
       if (!name) { highlight('db-f1'); return false; }
       const operator = document.getElementById('db-f2').value;
       if (!operator) { highlight('db-f2'); return false; }
-      db.axes.push({ id:dbNextId.axes++, name, operator, type:document.getElementById('db-f3').value, routes:document.getElementById('db-f4').value.split('،').map(s=>s.trim()).filter(Boolean), points:document.getElementById('db-f5').value.split('،').map(s=>s.trim()).filter(Boolean) });
+      const type = document.getElementById('db-f3').value;
+      const routes = document.getElementById('db-f4').value.split('،').map(s=>s.trim()).filter(Boolean);
+      const points = document.getElementById('db-f5').value.split('،').map(s=>s.trim()).filter(Boolean);
+      const carrierObj = db.carriers.find(c => c.name === operator);
+      const { error } = await supabaseClient.from('axes').insert({ name, operator_id: carrierObj ? carrierObj.id : null, type, routes, points });
+      if (error) { showToast('تعذّر حفظ المحور: ' + error.message); return false; }
       return name;
     },
     fill: (item) => {
@@ -4469,7 +4492,7 @@ const dbForms = {
       document.getElementById('db-f4').value = (item.routes||[]).join('، ');
       document.getElementById('db-f5').value = (item.points||[]).join('، ');
     },
-    update: (id) => {
+    update: async (id) => {
       const item = db.axes.find(x => x.id === id);
       if (!item) return false;
       const name = document.getElementById('db-f1').value.trim();
@@ -4478,11 +4501,17 @@ const dbForms = {
       if (!operator) { highlight('db-f2'); return false; }
       const oldOp = item.operator;
       const oldName = item.name;
+      const type = document.getElementById('db-f3').value;
+      const routes = document.getElementById('db-f4').value.split('،').map(s=>s.trim()).filter(Boolean);
+      const points = document.getElementById('db-f5').value.split('،').map(s=>s.trim()).filter(Boolean);
+      const carrierObj = db.carriers.find(c => c.name === operator);
+      const { error } = await supabaseClient.from('axes').update({ name, operator_id: carrierObj ? carrierObj.id : null, type, routes, points }).eq('id', id);
+      if (error) { showToast('تعذّر حفظ التعديلات: ' + error.message); return false; }
       item.name = name;
       item.operator = operator;
-      item.type = document.getElementById('db-f3').value;
-      item.routes = document.getElementById('db-f4').value.split('،').map(s=>s.trim()).filter(Boolean);
-      item.points = document.getElementById('db-f5').value.split('،').map(s=>s.trim()).filter(Boolean);
+      item.type = type;
+      item.routes = routes;
+      item.points = points;
       if (oldName && oldName !== name) {
         let affected = 0;
         contracts.forEach(c => { if (c.axis === oldName) { c.axis = name; affected++; } });
@@ -4508,10 +4537,12 @@ const dbForms = {
       <div class="form-group full"><label class="form-label">اسم الشركة <span>*</span></label><input class="form-input" id="db-f1" placeholder="مثال: النقل الذهبي"></div>
       <div class="form-group full"><label class="form-label">ملاحظات</label><input class="form-input" id="db-f2" placeholder="اختياري"></div>
     </div>`,
-    save: () => {
+    save: async () => {
       const name = document.getElementById('db-f1').value.trim();
       if (!name) { highlight('db-f1'); return false; }
-      db.carriers.push({ id:dbNextId.carriers++, name, notes:document.getElementById('db-f2').value.trim() });
+      const notes = document.getElementById('db-f2').value.trim();
+      const { error } = await supabaseClient.from('carriers').insert({ name, notes });
+      if (error) { showToast('تعذّر حفظ الشركة: ' + error.message); return false; }
       return name;
     }
   },
@@ -4522,10 +4553,13 @@ const dbForms = {
       <div class="form-group"><label class="form-label">اللون (Hex)</label><input class="form-input" id="db-f2" placeholder="#1E8A60" value="#1E8A60"></div>
       <div class="form-group"><label class="form-label">الوصف</label><input class="form-input" id="db-f3" placeholder="وصف مختصر"></div>
     </div>`,
-    save: () => {
+    save: async () => {
       const name = document.getElementById('db-f1').value.trim();
       if (!name) { highlight('db-f1'); return false; }
-      db.statuses.push({ id:dbNextId.statuses++, name, color:document.getElementById('db-f2').value||'#888', desc:document.getElementById('db-f3').value.trim() });
+      const color = document.getElementById('db-f2').value || '#888';
+      const description = document.getElementById('db-f3').value.trim();
+      const { error } = await supabaseClient.from('contract_statuses').insert({ name, color, description });
+      if (error) { showToast('تعذّر حفظ الحالة: ' + error.message); return false; }
       return name;
     }
   },
@@ -4535,10 +4569,12 @@ const dbForms = {
       <div class="form-group full"><label class="form-label">سبب الخصم <span>*</span></label><input class="form-input" id="db-f1" placeholder="مثال: يوم عطلة"></div>
       <div class="form-group full"><label class="form-label">ملاحظات</label><input class="form-input" id="db-f2" placeholder="اختياري"></div>
     </div>`,
-    save: () => {
+    save: async () => {
       const reason = document.getElementById('db-f1').value.trim();
       if (!reason) { highlight('db-f1'); return false; }
-      db.discount.push({ id:dbNextId.discount++, reason, notes:document.getElementById('db-f2').value.trim() });
+      const notes = document.getElementById('db-f2').value.trim();
+      const { error } = await supabaseClient.from('discount_reasons').insert({ reason, notes });
+      if (error) { showToast('تعذّر حفظ سبب الخصم: ' + error.message); return false; }
       return reason;
     }
   },
@@ -4549,10 +4585,13 @@ const dbForms = {
       <div class="form-group"><label class="form-label">النوع</label><select class="form-select" id="db-f2"><option>محور</option><option>مسار</option><option>أخرى</option></select></div>
       <div class="form-group"><label class="form-label">ملاحظات</label><input class="form-input" id="db-f3" placeholder="اختياري"></div>
     </div>`,
-    save: () => {
+    save: async () => {
       const name = document.getElementById('db-f1').value.trim();
       if (!name) { highlight('db-f1'); return false; }
-      db.classify.push({ id:dbNextId.classify++, name, type:document.getElementById('db-f2').value, notes:document.getElementById('db-f3').value.trim() });
+      const type = document.getElementById('db-f2').value;
+      const notes = document.getElementById('db-f3').value.trim();
+      const { error } = await supabaseClient.from('classifications').insert({ name, type, notes });
+      if (error) { showToast('تعذّر حفظ التصنيف: ' + error.message); return false; }
       return name;
     }
   },
@@ -4605,21 +4644,23 @@ window.closeDbModal = function() {
   dbEditId = null;
   dbEditTable = null;
 }
-window.saveDbItem = function() {
+window.saveDbItem = async function() {
   if (!currentDbType) return;
   const form = dbForms[currentDbType];
   // وضع التعديل
   if (dbEditId != null && form.update) {
-    const ok = form.update(dbEditId);
+    const ok = await form.update(dbEditId);
     if (!ok) return;
+    await loadDb();
     renderDb();
     if (window.populateContractDropdowns) populateContractDropdowns();
     closeDbModal();
     showToast('✓ تم تحديث البيانات');
     return;
   }
-  const result = form.save();
+  const result = await form.save();
   if (!result) return;
+  await loadDb();
   renderDb();
   if (window.populateContractDropdowns) populateContractDropdowns();
   closeDbModal();
@@ -4628,8 +4669,10 @@ window.saveDbItem = function() {
 
 window.askDelete = function(table, id, name) {
   document.getElementById('confirm-msg').textContent = `هل تريد حذف "${name}"؟ لا يمكن التراجع عن هذا الإجراء.`;
-  pendingDeleteFn = () => {
-    db[table] = db[table].filter(r => r.id !== id);
+  pendingDeleteFn = async () => {
+    const { error } = await supabaseClient.from(DB_SUPA_TABLE[table]).delete().eq('id', id);
+    if (error) { showToast('تعذّر الحذف: ' + error.message); return; }
+    await loadDb();
     renderDb();
     if (window.populateContractDropdowns) populateContractDropdowns();
     showToast('🗑 تم حذف "' + name + '"');
@@ -7149,7 +7192,10 @@ window.showProfileEdit = async function() {
   if (el) el.addEventListener('keydown', e => { if (e.key === 'Enter') window.doRegister(); });
 });
 
-renderDb();
+loadDb().then(() => {
+  renderDb();
+  if (window.populateContractDropdowns) populateContractDropdowns();
+});
 
 /* ═══════════════════════════════════════════════════════════════
    [إضافة جديدة] PAYMENTS MODULE — قسم الدفعات (إدخال يدوي بالكامل)
