@@ -2852,16 +2852,39 @@ window.showPage = function(id, btn) {
   btn.classList.add('active');
 }
 
-const contracts = [
-  { id:2,  hotel:'ميزاب السابق 2',   client:'شركة التقوى', axis:'باب علي',           point:'غرب الجمرات',       carrier:'رواحل',      buses:1, shift:'صباحية', start:'03/06/2026', end:'25/07/2026', days:53, price:800,  total:84800,  originalTotal:84800,  rem:34800,  status:'نشط' },
-  { id:4,  hotel:'ابراج الجابر',      client:'شركة التقوى', axis:'باب علي',           point:'غرب الجمرات',       carrier:'رواحل',      buses:0, start:'29/05/2026', end:'01/06/2026', days:8,  price:800,  total:12800,  originalTotal:12800,  rem:0,      status:'مكتمل' },
-  { id:6,  hotel:'اثير المشاعر',      client:'مؤسسة المشاعر', axis:'جبل الكعبة - غرب',  point:'جبل الكعبة - غرب',  carrier:'—',          buses:0, shift:'مسائية', start:'25/05/2026', end:'01/06/2026', days:8,  price:800,  total:13600,  originalTotal:13600,  rem:13600,  status:'متعثر' },
-  { id:7,  hotel:'اجم',               client:'مؤسسة المشاعر', axis:'باب علي',           point:'غرب الجمرات',       carrier:'رواحل',      buses:0, start:'29/05/2026', end:'01/06/2026', days:16, price:600,  total:22400,  originalTotal:22400,  rem:22400,  status:'متعثر' },
-  { id:8,  hotel:'اركان بكة',         client:'شركة التقوى', axis:'باب علي',           point:'منطقة 4',           carrier:'رواحل',      buses:0, start:'15/06/2026', end:'15/07/2026', days:31, price:600,  total:43400,  originalTotal:43400,  rem:0,      status:'لم يبدأ' },
-  { id:20, hotel:'التقوى الماسي',     client:'شركة التقوى', axis:'شعب عامر',          point:'شعب عامر',          carrier:'رواحل',      buses:3, shift:'كاملة', start:'20/05/2026', end:'20/06/2026', days:96, price:900,  total:144000, originalTotal:144000, rem:44000,  status:'نشط' },
-  { id:34, hotel:'ام من ملينيوم',     client:'مؤسسة المشاعر', axis:'ريع بخش',           point:'ريع بخش',           carrier:'رواحل',      buses:1, shift:'صباحية', start:'25/05/2026', end:'25/06/2026', days:27, price:800,  total:43200,  originalTotal:43200,  rem:28200,  status:'تعثر محتمل' },
-  { id:140,hotel:'فنادق الضيافة',     client:'مؤسسة المشاعر', axis:'جبل الكعبة - غرب',  point:'جبل الكعبة - غرب',  carrier:'—',          buses:1, start:'25/05/2026', end:'25/11/2026', days:185,price:0,   total:0,      originalTotal:0,      rem:0,      status:'بدون تسعير' },
-];
+const contracts = [];
+
+function dmyToISO(dmy) { if (!dmy || !dmy.includes('/')) return null; const [d,m,y] = dmy.split('/'); return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`; }
+function isoToDMY(iso) { if (!iso) return ''; const [y,m,d] = iso.split('-'); return `${d}/${m}/${y}`; }
+
+// يحوّل صف عقد من Supabase (IDs) لنفس الشكل اللي يتوقعه باقي الكود (أسماء نصية)
+function contractFromRow(row, names) {
+  return {
+    id: row.id, displayId: row.display_id || undefined, parentId: row.parent_id || null,
+    client: names.clients[row.client_id] || '', hotel: names.hotels[row.hotel_id] || '',
+    axis: names.axes[row.axis_id] || '', point: row.point || '', carrier: names.carriers[row.carrier_id] || '—',
+    rentalOrder: row.rental_order || '', buses: row.buses || 0,
+    createdAt: row.created_at ? new Date(row.created_at).toLocaleDateString('ar-SA',{day:'2-digit',month:'2-digit',year:'numeric'}) : '',
+    start: isoToDMY(row.start_date), end: isoToDMY(row.end_date),
+    startShift: row.start_shift || 'وردية كاملة', endShift: row.end_shift || 'وردية كاملة', shift: row.shift || 'كاملة',
+    rental: Number(row.rental_rate)||0, rentalCost: Number(row.rental_cost)||0, days: row.days||0, price: Number(row.price)||0,
+    total: Number(row.total)||0, originalTotal: Number(row.original_total)||0, rem: Number(row.remaining)||0,
+    status: row.status || '', distributedPayment: !!row.distributed_payment,
+  };
+}
+
+async function loadContracts() {
+  const { data, error } = await supabaseClient.from('contracts').select('*').order('id');
+  if (error) { showToast('تعذّر تحميل العقود: ' + error.message); return; }
+  const names = {
+    clients: Object.fromEntries(db.clients.map(c => [c.id, c.name])),
+    hotels: Object.fromEntries(db.hotels.map(h => [h.id, h.name])),
+    axes: Object.fromEntries(db.axes.map(a => [a.id, a.name])),
+    carriers: Object.fromEntries(db.carriers.map(c => [c.id, c.name])),
+  };
+  contracts.length = 0;
+  (data||[]).forEach(row => contracts.push(contractFromRow(row, names)));
+}
 
 const statusBadge = {
   'نشط':           'badge-green',
@@ -3597,7 +3620,7 @@ window.updateCalc = function() {
 
 /* ── PAYMENT SCHEDULE GENERATOR is defined below ── */
 
-window.saveContract = function() {
+window.saveContract = async function() {
   const checkedBoxes = [...document.querySelectorAll('.hotel-cb:checked')];
   const client = document.getElementById('f-client').value || '';
   const axis   = document.getElementById('f-axis').value;
@@ -3646,14 +3669,33 @@ window.saveContract = function() {
     ? contracts.filter(c => c.parentId === pendingParentContractId).length + 1
     : null;
 
+  const clientObj = db.clients.find(x => x.name === client);
+  const axisObj   = db.axes.find(x => x.name === axis);
+  const carrierObj = db.carriers.find(x => x.name === carrier);
+
   const addedNames = [];
   let lastDisplayId = null;
   for (const cb of checkedBoxes) {
     const hotel = cb.value.trim();
-    const newId = Math.max(...contracts.map(c => Number(c.id) || 0)) + 1;
-    const displayId = parentForDisplay ? `${parentForDisplay.displayId || parentForDisplay.id}-${nextChildSeq}` : undefined;
+    const hotelObj = db.hotels.find(x => x.name === hotel);
+    const displayId = parentForDisplay ? `${parentForDisplay.displayId || parentForDisplay.id}-${nextChildSeq}` : null;
+
+    const { data: row, error } = await supabaseClient.from('contracts').insert({
+      display_id: displayId, parent_id: pendingParentContractId,
+      client_id: clientObj ? clientObj.id : null, hotel_id: hotelObj ? hotelObj.id : null,
+      axis_id: axisObj ? axisObj.id : null, point, carrier_id: carrierObj ? carrierObj.id : null,
+      rental_order: rentalOrder, buses,
+      start_date: start, end_date: end,
+      start_shift: 'وردية كاملة', end_shift: 'وردية كاملة', shift: 'كاملة',
+      rental_rate: rental, rental_cost: rentalCost, days, price, total, original_total: total, remaining: total,
+      status: '', distributed_payment: distributedPayment,
+    }).select().single();
+
+    if (error) { showToast('تعذّر حفظ العقد: ' + error.message); continue; }
+    const newId = row.id;
+
     contracts.push({
-      id: newId, displayId, hotel, client, axis, point, carrier, rentalOrder, buses, createdAt,
+      id: newId, displayId: displayId || undefined, hotel, client, axis, point, carrier, rentalOrder, buses, createdAt,
       start: fmt(start), end: fmt(end),
       startShift: 'وردية كاملة', endShift: 'وردية كاملة', shift: 'كاملة',
       rental, rentalCost, days, price, total, originalTotal: total, rem: total,
@@ -6027,7 +6069,7 @@ window.confirmEditInstalment = function() {
   showToast(`✓ تم تعديل الدفعة ${row.num}`);
 };
 
-window.saveEditContract = function() {
+window.saveEditContract = async function() {
   const hotel  = document.getElementById('e-hotel').value.trim();
   const editor = currentUser.name || document.getElementById('e-editor').value.trim() || 'غير محدد';
   if (!hotel) { highlight('e-hotel'); return; }
@@ -6107,6 +6149,19 @@ window.saveEditContract = function() {
   const oldStatus = c.status;
   c.status = computeContractStatus(c);
   if (oldStatus !== c.status) changes.push(`الحالة (تلقائي): "${oldStatus}" ← "${c.status}"`);
+
+  const hotelObj = db.hotels.find(x => x.name === newHotel);
+  const axisObj = db.axes.find(x => x.name === newAxis);
+  const carrierObj = db.carriers.find(x => x.name === newCarrier);
+  const { error } = await supabaseClient.from('contracts').update({
+    hotel_id: hotelObj ? hotelObj.id : null, axis_id: axisObj ? axisObj.id : null,
+    point: newPoint, carrier_id: carrierObj ? carrierObj.id : null, rental_order: newRentalOrder,
+    buses: newBuses, price: newPrice, days: c.days,
+    start_date: dmyToISO(c.start), end_date: dmyToISO(c.end),
+    rental_rate: c.rental, rental_cost: c.rentalCost,
+    original_total: c.originalTotal, total: c.total, remaining: c.rem, status: c.status,
+  }).eq('id', c.id);
+  if (error) { showToast('تعذّر حفظ التعديلات على قاعدة البيانات: ' + error.message); }
 
   addAuditEntry(
     editor, 'تعديل', c.id, c.hotel,
@@ -6317,7 +6372,9 @@ window.askDeleteContract = function(id, name) {
     return;
   }
   document.getElementById('confirm-msg').textContent = `هل تريد حذف عقد "${name}"؟ سيُحذف العقد وجميع دفعاته المسجّلة.`;
-  pendingDeleteFn = () => {
+  pendingDeleteFn = async () => {
+    const { error } = await supabaseClient.from('contracts').delete().eq('id', id);
+    if (error) { showToast('تعذّر حذف العقد: ' + error.message); return; }
     addAuditEntry('النظام', 'حذف', (cToDelete && cToDelete.displayId) || id, name, `حُذف العقد #${(cToDelete && cToDelete.displayId) || id} — ${name}`, '');
     const idx = contracts.findIndex(x => x.id === id);
     if (idx !== -1) contracts.splice(idx, 1);
@@ -7192,9 +7249,15 @@ window.showProfileEdit = async function() {
   if (el) el.addEventListener('keydown', e => { if (e.key === 'Enter') window.doRegister(); });
 });
 
-loadDb().then(() => {
+loadDb().then(async () => {
   renderDb();
   if (window.populateContractDropdowns) populateContractDropdowns();
+  await loadContracts();
+  if (window.filterContracts) filterContracts();
+  if (window.renderReports) renderReports();
+  if (window.renderOperations) renderOperations();
+  if (window.renderAlerts) renderAlerts();
+  if (window.renderCollectionPage) renderCollectionPage();
 });
 
 /* ═══════════════════════════════════════════════════════════════
