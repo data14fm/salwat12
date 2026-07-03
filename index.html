@@ -5521,11 +5521,13 @@ function nowStr() {
 }
 
 function addAuditEntry(user, type, contractId, hotel, details, note) {
+  const entryUser = user || 'غير محدد';
+  const entryNote = note || '';
   auditLog.unshift({
     id: auditNextId++,
     ts: nowStr(),
-    user: user || 'غير محدد',
-    type, contractId, hotel, details, note: note || '',
+    user: entryUser,
+    type, contractId, hotel, details, note: entryNote,
   });
   // update user filter dropdown
   const sel = document.getElementById('audit-filter-user');
@@ -5534,6 +5536,26 @@ function addAuditEntry(user, type, contractId, hotel, details, note) {
     opt.value = user; opt.textContent = user;
     sel.appendChild(opt);
   }
+
+  // يُحفظ بالخلفية بدون انتظار — addAuditEntry تُستدعى من مئات المواضع بشكل متزامن
+  // ولا نبي نحوّلها كلها لدوال async لمجرد تسجيل السجل
+  const cid = Number.isInteger(contractId) ? contractId : null;
+  supabaseClient.from('audit_log').insert({
+    user_name: entryUser, action_type: type, contract_id: cid, hotel, details, note: entryNote,
+  }).then(({ error }) => { if (error) console.warn('audit_log insert failed:', error.message); });
+}
+
+async function loadAuditLog() {
+  const { data, error } = await supabaseClient.from('audit_log').select('*').order('id', { ascending: false });
+  if (error) return;
+  auditLog.length = 0;
+  (data||[]).forEach(row => auditLog.push({
+    id: row.id,
+    ts: row.occurred_at ? new Date(row.occurred_at).toLocaleString('ar-SA', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false }) : '',
+    user: row.user_name || 'غير محدد',
+    type: row.action_type, contractId: row.contract_id, hotel: row.hotel, details: row.details, note: row.note || '',
+  }));
+  auditNextId = auditLog.length ? Math.max(...auditLog.map(e => e.id)) + 1 : 1;
 }
 
 const auditTypeBadge = {
@@ -7456,6 +7478,8 @@ loadDb().then(async () => {
   await loadContracts();
   await loadFinancials();
   await loadClientBalances();
+  await loadAuditLog();
+  if (window.renderAuditLog) renderAuditLog();
   if (window.filterContracts) filterContracts();
   if (window.renderReports) renderReports();
   if (window.renderOperations) renderOperations();
