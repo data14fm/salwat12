@@ -7386,6 +7386,7 @@ loadDb().then(async () => {
   if (window.populateContractDropdowns) populateContractDropdowns();
   await loadContracts();
   await loadFinancials();
+  await loadClientBalances();
   if (window.filterContracts) filterContracts();
   if (window.renderReports) renderReports();
   if (window.renderOperations) renderOperations();
@@ -8088,6 +8089,26 @@ let settleOpenClient = null;
 let settleSelectedContractId = null;
 // أرصدة العملاء الدائنة — فائض الدفعات الموزّعة بعد تغطية كل عقود العميل (تُستخدم أيضاً من نافذة التوزيع لاحقاً في الملف)
 let clientBalances = {}; // { clientName: amount }
+
+async function loadClientBalances() {
+  const { data, error } = await supabaseClient.from('client_balances').select('*');
+  if (error) return;
+  const nameById = Object.fromEntries(db.clients.map(c => [c.id, c.name]));
+  Object.keys(clientBalances).forEach(k => delete clientBalances[k]);
+  (data||[]).forEach(row => {
+    const name = nameById[row.client_id];
+    if (name) clientBalances[name] = Number(row.amount) || 0;
+  });
+}
+
+// يحفظ رصيد عميل معيّن في Supabase (upsert بحسب client_id)
+async function syncClientBalance(clientName) {
+  const clientObj = db.clients.find(c => c.name === clientName);
+  if (!clientObj) return;
+  await supabaseClient.from('client_balances').upsert({
+    client_id: clientObj.id, amount: clientBalances[clientName] || 0, updated_at: new Date().toISOString(),
+  });
+}
 let balanceOpenClient = null;
 let rescheduleContractId = null; // العقد المفتوح حالياً نموذج "جدولة متعثر" له
 let settleInstPanelKey = null; // مفتاح "ctx-id" لعقد مفتوحة لوحة اختيار/سداد الدفعة من جدوله
@@ -9541,6 +9562,7 @@ window.saveDistribution = async function() {
   let balanceNote = '';
   if (remaining > 0) {
     clientBalances[client] = (clientBalances[client] || 0) + remaining;
+    await syncClientBalance(client);
     balanceNote = ` · أُضيف ${remaining.toLocaleString()} ريال لرصيد العميل الدائن`;
   }
 
