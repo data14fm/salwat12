@@ -3217,11 +3217,12 @@ window.handleExcelImport = function(evt) {
   if (!file) return;
   if (typeof XLSX === 'undefined') { showToast('⚠ مكتبة قراءة إكسل غير محمّلة'); evt.target.value=''; return; }
   const reader = new FileReader();
-  reader.onload = function(e) {
+  reader.onload = async function(e) {
     try {
       const data = new Uint8Array(e.target.result);
       const wb = XLSX.read(data, { type:'array', cellDates:false });
-      importFromWorkbook(wb);
+      showToast('⏳ جارٍ الاستيراد ورفعه لقاعدة البيانات...');
+      await importFromWorkbook(wb);
     } catch (err) {
       showToast('⚠ تعذّرت قراءة الملف: ' + (err.message || err));
     }
@@ -3230,7 +3231,7 @@ window.handleExcelImport = function(evt) {
   reader.readAsArrayBuffer(file);
 };
 
-function importFromWorkbook(wb) {
+async function importFromWorkbook(wb) {
   const dbSheetName        = wb.SheetNames.find(n => n.includes('قاعدة البيانات'));
   const contractsSheetName = wb.SheetNames.find(n => n.includes('عقود الصلوات'));
 
@@ -3241,13 +3242,17 @@ function importFromWorkbook(wb) {
 
   let dbStats = { clients:0, hotels:0, axes:0, carriers:0, statuses:0, discounts:0 };
   if (dbSheetName) {
-    dbStats = importDatabaseSheet(XLSX.utils.sheet_to_json(wb.Sheets[dbSheetName], { header:1, defval:'' }));
+    dbStats = await importDatabaseSheet(XLSX.utils.sheet_to_json(wb.Sheets[dbSheetName], { header:1, defval:'' }));
   }
 
   let contractStats = { added:0, skipped:0 };
   if (contractsSheetName) {
-    contractStats = importContractsSheet(XLSX.utils.sheet_to_json(wb.Sheets[contractsSheetName], { header:1, defval:'' }));
+    contractStats = await importContractsSheet(XLSX.utils.sheet_to_json(wb.Sheets[contractsSheetName], { header:1, defval:'' }));
   }
+
+  await loadDb();
+  await loadContracts();
+  await loadFinancials();
 
   renderDb();
   if (window.populateContractDropdowns) populateContractDropdowns();
@@ -3268,9 +3273,39 @@ function importFromWorkbook(wb) {
 }
 
 // ورقة "قاعدة البيانات": المحاور + أسباب الخصم + حالات التعاقد + العملاء/الفنادق + الناقلين
-function importDatabaseSheet(rows) {
+async function importDatabaseSheet(rows) {
   const stats = { clients:0, hotels:0, axes:0, carriers:0, statuses:0, discounts:0 };
   const dataRows = rows.slice(1); // الصف الأول عناوين الأعمدة
+
+  // الشركات الناقلة: العمود R(17) — تُنشأ أولاً لأن المحاور تحتاج ربطها بها
+  const carrierSet = new Set();
+  dataRows.forEach(r => { const v = normStr(r[17]); if (v) carrierSet.add(v); });
+  for (const name of carrierSet) {
+    if (!db.carriers.find(c => c.name === name)) {
+      const { data, error } = await supabaseClient.from('carriers').insert({ name, notes:'' }).select().single();
+      if (!error) { db.carriers.push({ id:data.id, name, notes:'' }); stats.carriers++; }
+    }
+  }
+
+  // أسباب الخصم: العمود F(5)
+  const discountSet = new Set();
+  dataRows.forEach(r => { const v = normStr(r[5]); if (v) discountSet.add(v); });
+  for (const reason of discountSet) {
+    if (!db.discount.find(d => d.reason === reason)) {
+      const { data, error } = await supabaseClient.from('discount_reasons').insert({ reason, notes:'' }).select().single();
+      if (!error) { db.discount.push({ id:data.id, reason, notes:'' }); stats.discounts++; }
+    }
+  }
+
+  // حالات التعاقد: العمود H(7)
+  const statusSet = new Set();
+  dataRows.forEach(r => { const v = normStr(r[7]); if (v) statusSet.add(v); });
+  for (const name of statusSet) {
+    if (!db.statuses.find(s => s.name === name)) {
+      const { data, error } = await supabaseClient.from('contract_statuses').insert({ name, color:'#8A8278', description:'' }).select().single();
+      if (!error) { db.statuses.push({ id:data.id, name, color:'#8A8278', desc:'' }); stats.statuses++; }
+    }
+  }
 
   // المحاور: العمود A(0)=اسم المحور، B(1)=المشغّل، C(2)=المسار، D(3)=نقطة الفرز
   const axisMap = {};
@@ -3282,116 +3317,118 @@ function importDatabaseSheet(rows) {
     if (normStr(r[2])) axisMap[name].routes.add(normStr(r[2]));
     if (normStr(r[3])) axisMap[name].points.add(normStr(r[3]));
   });
-  Object.entries(axisMap).forEach(([name, v]) => {
+  for (const [name, v] of Object.entries(axisMap)) {
     const existing = db.axes.find(a => a.name === name);
+    const operator = v.operator || 'رواحل';
     if (!existing) {
-      db.axes.push({
-        id: dbNextId.axes++, name, operator: v.operator || 'رواحل',
-        type: name === 'باب علي' ? 'BabAli' : 'Normal',
-        routes: v.routes.size ? [...v.routes] : ['عادي'],
-        points: v.points.size ? [...v.points] : [name],
-      });
-      stats.axes++;
+      const carrierObj = db.carriers.find(c => c.name === operator);
+      const routes = v.routes.size ? [...v.routes] : ['عادي'];
+      const points = v.points.size ? [...v.points] : [name];
+      const type = name === 'باب علي' ? 'BabAli' : 'Normal';
+      const { data, error } = await supabaseClient.from('axes').insert({
+        name, operator_id: carrierObj ? carrierObj.id : null, type, routes, points,
+      }).select().single();
+      if (!error) { db.axes.push({ id:data.id, name, operator, type, routes, points }); stats.axes++; }
     } else {
-      v.routes.forEach(rt => { if (!existing.routes.includes(rt)) existing.routes.push(rt); });
-      v.points.forEach(p  => { if (!existing.points.includes(p))  existing.points.push(p); });
+      const newRoutes = [...existing.routes]; v.routes.forEach(rt => { if (!newRoutes.includes(rt)) newRoutes.push(rt); });
+      const newPoints = [...existing.points]; v.points.forEach(p  => { if (!newPoints.includes(p))  newPoints.push(p); });
+      if (newRoutes.length !== existing.routes.length || newPoints.length !== existing.points.length) {
+        await supabaseClient.from('axes').update({ routes:newRoutes, points:newPoints }).eq('id', existing.id);
+        existing.routes = newRoutes; existing.points = newPoints;
+      }
     }
-  });
-
-  // أسباب الخصم: العمود F(5)
-  const discountSet = new Set();
-  dataRows.forEach(r => { const v = normStr(r[5]); if (v) discountSet.add(v); });
-  discountSet.forEach(reason => {
-    if (!db.discount.find(d => d.reason === reason)) {
-      db.discount.push({ id: dbNextId.discount++, reason, notes:'' });
-      stats.discounts++;
-    }
-  });
-
-  // حالات التعاقد: العمود H(7)
-  const statusSet = new Set();
-  dataRows.forEach(r => { const v = normStr(r[7]); if (v) statusSet.add(v); });
-  statusSet.forEach(name => {
-    if (!db.statuses.find(s => s.name === name)) {
-      db.statuses.push({ id: dbNextId.statuses++, name, color:'#8A8278', desc:'' });
-      stats.statuses++;
-    }
-  });
-
-  // الشركات الناقلة: العمود R(17)
-  const carrierSet = new Set();
-  dataRows.forEach(r => { const v = normStr(r[17]); if (v) carrierSet.add(v); });
-  carrierSet.forEach(name => {
-    if (!db.carriers.find(c => c.name === name)) {
-      db.carriers.push({ id: dbNextId.carriers++, name, notes:'' });
-      stats.carriers++;
-    }
-  });
+  }
 
   // العملاء والفنادق: J(9)=العميل، K(10)=الفندق، L(11)=المحور، N(13)=نقطة الفرز
   const hotelIdByName = {};
-  dataRows.forEach(r => {
+  for (const r of dataRows) {
     const hotelName = normStr(r[10]);
-    if (!hotelName) return;
+    if (!hotelName) continue;
     let hotel = db.hotels.find(h => h.name === hotelName);
     if (!hotel) {
-      hotel = { id: dbNextId.hotels++, name: hotelName, location: normStr(r[13]) || normStr(r[11]), axis: normStr(r[11]), notes:'' };
+      const location = normStr(r[13]) || normStr(r[11]);
+      const axisName = normStr(r[11]);
+      const axisObj = db.axes.find(a => a.name === axisName);
+      const { data, error } = await supabaseClient.from('hotels').insert({
+        name: hotelName, location, axis_id: axisObj ? axisObj.id : null, notes:'',
+      }).select().single();
+      if (error) continue;
+      hotel = { id:data.id, name: hotelName, location, axis: axisName, notes:'' };
       db.hotels.push(hotel);
       stats.hotels++;
     }
     hotelIdByName[hotelName] = hotel.id;
-  });
-  dataRows.forEach(r => {
+  }
+  const newLinks = [];
+  for (const r of dataRows) {
     const clientName = normStr(r[9]);
     const hotelName   = normStr(r[10]);
-    if (!clientName) return;
+    if (!clientName) continue;
     let client = db.clients.find(c => c.name === clientName);
     if (!client) {
-      client = { id: dbNextId.clients++, name: clientName, contact:'', notes:'', hotelIds: [] };
+      const { data, error } = await supabaseClient.from('clients').insert({ name: clientName, contact:'', notes:'' }).select().single();
+      if (error) continue;
+      client = { id:data.id, name: clientName, contact:'', notes:'', hotelIds: [] };
       db.clients.push(client);
       stats.clients++;
     }
     const hid = hotelIdByName[hotelName];
-    if (hid && !client.hotelIds.includes(hid)) client.hotelIds.push(hid);
-  });
+    if (hid && !client.hotelIds.includes(hid)) {
+      client.hotelIds.push(hid);
+      newLinks.push({ client_id: client.id, hotel_id: hid });
+    }
+  }
+  if (newLinks.length) {
+    await supabaseClient.from('client_hotels').upsert(newLinks, { onConflict: 'client_id,hotel_id', ignoreDuplicates: true });
+  }
 
   return stats;
 }
 
 // يتأكد أن العميل والفندق موجودان في قاعدة البيانات ومرتبطان ببعض (يُستخدم أثناء استيراد العقود)
-function ensureClientHotelLinked(clientName, hotelName, axis, point) {
+async function ensureClientHotelLinked(clientName, hotelName, axis, point) {
   let hotel = db.hotels.find(h => h.name === hotelName);
   if (!hotel) {
-    hotel = { id: dbNextId.hotels++, name: hotelName, location: point || axis || '', axis: axis || '', notes:'' };
-    db.hotels.push(hotel);
+    const axisObj = db.axes.find(a => a.name === axis);
+    const location = point || axis || '';
+    const { data, error } = await supabaseClient.from('hotels').insert({
+      name: hotelName, location, axis_id: axisObj ? axisObj.id : null, notes:'',
+    }).select().single();
+    if (!error) { hotel = { id:data.id, name: hotelName, location, axis: axis || '', notes:'' }; db.hotels.push(hotel); }
   }
   let client = db.clients.find(c => c.name === clientName);
   if (!client) {
-    client = { id: dbNextId.clients++, name: clientName, contact:'', notes:'', hotelIds: [] };
-    db.clients.push(client);
+    const { data, error } = await supabaseClient.from('clients').insert({ name: clientName, contact:'', notes:'' }).select().single();
+    if (!error) { client = { id:data.id, name: clientName, contact:'', notes:'', hotelIds: [] }; db.clients.push(client); }
   }
-  if (!client.hotelIds.includes(hotel.id)) client.hotelIds.push(hotel.id);
+  if (hotel && client && !client.hotelIds.includes(hotel.id)) {
+    client.hotelIds.push(hotel.id);
+    await supabaseClient.from('client_hotels').upsert(
+      { client_id: client.id, hotel_id: hotel.id },
+      { onConflict: 'client_id,hotel_id', ignoreDuplicates: true }
+    );
+  }
 }
 
 // ورقة "عقود الصلوات": كل صف بيانات يتحوّل إلى عقد جديد
 // ملاحظة مهمّة: السعر ورسوم المحطة بالملف الأصلي مبلغ إجمالي لكل الحافلات وليس لكل حافلة،
 // لذا نقسمهما على عدد الحافلات حتى تبقى معادلة الموقع (أيام × حافلات × سعر) صحيحة عند أي تعديل لاحق
-function importContractsSheet(rows) {
+async function importContractsSheet(rows) {
   const stats = { added:0, skipped:0 };
   const dataRows = rows.slice(2); // أول صفين عناوين
 
-  dataRows.forEach(r => {
+  for (const r of dataRows) {
     const client = normStr(r[4]);
     const hotel  = normStr(r[5]);
-    if (!client || !hotel) { stats.skipped++; return; }
+    if (!client || !hotel) { stats.skipped++; continue; }
 
     const startStr = excelCellToDMY(r[14]);
     const endStr    = excelCellToDMY(r[15]);
-    if (!startStr || !endStr) { stats.skipped++; return; }
+    if (!startStr || !endStr) { stats.skipped++; continue; }
     // تجاهل الصف لو تاريخ النهاية قبل تاريخ البداية — علامة على خطأ قراءة وليس بيانات حقيقية
     const startCheck = new Date(startStr.split('/').reverse().join('-'));
     const endCheck    = new Date(endStr.split('/').reverse().join('-'));
-    if (endCheck < startCheck) { stats.skipped++; return; }
+    if (endCheck < startCheck) { stats.skipped++; continue; }
 
     const axis        = normStr(r[6]);
     const point        = normStr(r[8]) || axis;
@@ -3412,9 +3449,25 @@ function importContractsSheet(rows) {
     const total       = totalRaw || (days * buses * price + rentalCost);
     const rem         = (r[28] !== '' && r[28] !== undefined) ? Math.max(0, normNum(r[28])) : total;
 
-    ensureClientHotelLinked(client, hotel, axis, point);
+    await ensureClientHotelLinked(client, hotel, axis, point);
 
-    const newId = Math.max(0, ...contracts.map(c => Number(c.id) || 0)) + 1;
+    const clientObj = db.clients.find(x => x.name === client);
+    const hotelObj = db.hotels.find(x => x.name === hotel);
+    const axisObj = db.axes.find(x => x.name === axis);
+    const carrierObj = db.carriers.find(x => x.name === carrier);
+
+    const { data: row, error: rowErr } = await supabaseClient.from('contracts').insert({
+      client_id: clientObj ? clientObj.id : null, hotel_id: hotelObj ? hotelObj.id : null,
+      axis_id: axisObj ? axisObj.id : null, point, carrier_id: carrierObj ? carrierObj.id : null,
+      rental_order: rentalOrder, buses,
+      start_date: dmyToISO(startStr), end_date: dmyToISO(endStr),
+      start_shift: 'وردية كاملة', end_shift: 'وردية كاملة', shift: 'كاملة',
+      rental_rate: rentalRate, rental_cost: rentalCost, days, price, total, original_total: total, remaining: rem,
+      status: '', distributed_payment: false,
+    }).select().single();
+    if (rowErr) { stats.skipped++; continue; }
+    const newId = row.id;
+
     const createdAt = new Date().toLocaleDateString('ar-SA',{day:'2-digit',month:'2-digit',year:'numeric'});
     contracts.push({
       id: newId, hotel, client, axis, point, carrier, rentalOrder, buses, createdAt,
@@ -3427,38 +3480,32 @@ function importContractsSheet(rows) {
     // لو المصدر فيه أعمدة "دفعة 1..4" مذكورة صراحةً، نسجّل كل واحدة منها كدفعة مستقلة في سجل الدفعات
     // (هذا يعكس دفعات حقيقية متعددة بدل تجميعها في دفعة واحدة)
     const payDateStr = new Date().toLocaleDateString('ar-SA',{day:'2-digit',month:'2-digit',year:'numeric'});
+    const todayISO = new Date().toISOString().slice(0,10);
     const ordinalLabels = ['الأولى','الثانية','الثالثة','الرابعة'];
     const individualPayments = [24,25,26,27]
       .map((idx,i) => ({ label: ordinalLabels[i], amount: normNum(r[idx]) }))
       .filter(p => p.amount > 0);
 
     if (individualPayments.length) {
-      individualPayments.forEach((p, i) => {
-        paymentsLog.push({
-          pid: Date.now() + Math.random(),
-          contractId: newId,
-          amount: p.amount,
-          method: 'نقد',
-          sender: client,
-          receiver: currentUser.name || 'النظام',
-          note: `الدفعة ${p.label} مستوردة من إكسل (بمبلغ ${p.amount.toLocaleString()} ريال)${individualPayments.length>1 ? ` — دفعة ${i+1} من ${individualPayments.length} — دفعات متعددة بحسب المصدر` : ' (بدون تاريخ سداد حقيقي)'}`,
-          date: payDateStr,
-        });
-      });
+      for (let i = 0; i < individualPayments.length; i++) {
+        const p = individualPayments[i];
+        const note = `الدفعة ${p.label} مستوردة من إكسل (بمبلغ ${p.amount.toLocaleString()} ريال)${individualPayments.length>1 ? ` — دفعة ${i+1} من ${individualPayments.length} — دفعات متعددة بحسب المصدر` : ' (بدون تاريخ سداد حقيقي)'}`;
+        const { data: payRow, error: payErr } = await supabaseClient.from('payments').insert({
+          contract_id: newId, amount: p.amount, method: 'نقد', sender: client,
+          receiver: currentUser.name || 'النظام', note, paid_at: todayISO,
+        }).select().single();
+        if (!payErr) paymentsLog.push({ pid: payRow.id, contractId: newId, amount: p.amount, method: 'نقد', sender: client, receiver: currentUser.name || 'النظام', note, date: payDateStr });
+      }
     } else {
       // لا توجد دفعات فردية مذكورة بالمصدر — نسجّل الفرق بين الإجمالي والمتبقي كدفعة واحدة مجمّعة
       const paidFromSource = Math.max(0, total - rem);
       if (paidFromSource > 0) {
-        paymentsLog.push({
-          pid: Date.now() + Math.random(),
-          contractId: newId,
-          amount: paidFromSource,
-          method: 'نقد',
-          sender: client,
-          receiver: currentUser.name || 'النظام',
-          note: 'دفعة مجمّعة مستوردة من إكسل (بدون تفاصيل دفعات فردية أو تاريخ سداد حقيقي)',
-          date: payDateStr,
-        });
+        const note = 'دفعة مجمّعة مستوردة من إكسل (بدون تفاصيل دفعات فردية أو تاريخ سداد حقيقي)';
+        const { data: payRow, error: payErr } = await supabaseClient.from('payments').insert({
+          contract_id: newId, amount: paidFromSource, method: 'نقد', sender: client,
+          receiver: currentUser.name || 'النظام', note, paid_at: todayISO,
+        }).select().single();
+        if (!payErr) paymentsLog.push({ pid: payRow.id, contractId: newId, amount: paidFromSource, method: 'نقد', sender: client, receiver: currentUser.name || 'النظام', note, date: payDateStr });
       }
     }
 
@@ -3474,7 +3521,7 @@ function importContractsSheet(rows) {
       `عقد مستورد: ${hotel} · ${axis} · ${buses} حافلة · ${total.toLocaleString()} ريال`, note);
 
     stats.added++;
-  });
+  }
 
   return stats;
 }
