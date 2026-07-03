@@ -4447,9 +4447,7 @@ const dbForms = {
             <div class="form-group"><label class="form-label">المحور</label>
               <select class="form-select" id="newhotel-axis">
                 <option value="">— اختر —</option>
-                <option>باب علي</option><option>جبل الكعبة - غرب</option><option>جبل الكعبة - شرق</option>
-                <option>شعب عامر</option><option>ريع بخش</option><option>كدي</option>
-                <option>المسخوطة</option><option>المدينة المنورة</option><option>جرول</option>
+                ${db.axes.map(a=>`<option>${esc(a.name)}</option>`).join('')}
               </select>
             </div>
             <div class="form-group full"><label class="form-label">ملاحظات</label><input class="form-input" id="newhotel-notes" placeholder="اختياري"></div>
@@ -4535,19 +4533,17 @@ const dbForms = {
   },
   hotel: {
     title: 'إضافة فندق جديد',
-    html: `<div class="form-grid">
+    get html() { return `<div class="form-grid">
       <div class="form-group full"><label class="form-label">اسم الفندق <span>*</span></label><input class="form-input" id="db-f1" placeholder="مثال: برج الصفوة"></div>
       <div class="form-group"><label class="form-label">الموقع</label><input class="form-input" id="db-f2" placeholder="مثال: غرب الجمرات"></div>
       <div class="form-group"><label class="form-label">المحور</label>
         <select class="form-select" id="db-f3">
           <option value="">— اختر —</option>
-          <option>باب علي</option><option>جبل الكعبة - غرب</option><option>جبل الكعبة - شرق</option>
-          <option>شعب عامر</option><option>ريع بخش</option><option>كدي</option>
-          <option>المسخوطة</option><option>المدينة المنورة</option><option>جرول</option>
+          ${db.axes.map(a=>`<option>${esc(a.name)}</option>`).join('')}
         </select>
       </div>
       <div class="form-group full"><label class="form-label">ملاحظات</label><input class="form-input" id="db-f4" placeholder="اختياري"></div>
-    </div>`,
+    </div>`; },
     save: async () => {
       const name = document.getElementById('db-f1').value.trim();
       if (!name) { highlight('db-f1'); return false; }
